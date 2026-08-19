@@ -3,6 +3,7 @@ import {getPosts, PostItem} from "@/lib/get-posts";
 import {Link} from "next-view-transitions";
 import {IconArrowNarrowRight, IconTags} from "@tabler/icons-react";
 import {formatDate} from "@/lib/format-date";
+import fixRTL from 'rtl-text-tools';
 
 type Props = {
     posts?: PostItem[];
@@ -23,7 +24,7 @@ export async function Posts({posts, tags, excludeByTitle, first, showViewAllButt
                         <div className="w-[calc(100%-100px)]">
                             <div className="font-bold">
                                 <Link href={post.route} className="hover:underline">
-                                    {post.title}
+                                    {fixRTL(post.title, 'persian')}
                                 </Link>
                             </div>
                             <div className="flex gap-1 text-sm">
@@ -41,7 +42,7 @@ export async function Posts({posts, tags, excludeByTitle, first, showViewAllButt
                             </div>
                         </div>
 
-                        <div className="w-[100px] text-right">
+                        <div className="w-[100px] ">
                             <div className="text-sm text-muted-foreground pt-1">
                                 <div>
                                     {formatDate(post.frontMatter.date)}
