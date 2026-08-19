@@ -1,0 +1,97 @@
+---
+title: "خلاصه فصل دوازدهم کتاب Clean Code: ظهور طراحی و قوانین چهارگانه طراحی ساده"
+date: '2026-08-20'
+tags: ['کدتمیز', 'CleanCode', 'طراحی_ساده', 'Kent_Beck', 'برنامه‌نویسی']
+description: "بررسی قوانین چهارگانه طراحی ساده کنت بک در فصل دوازدهم کتاب کد تمیز؛ از تست‌پذیری و حذف تکرار تا بیان نیت برنامه‌نویس و پرهیز از وسواس بی‌مورد."
+enableComment: true
+---
+
+# ظهور طراحی؛ چگونه کد تمیز خود را نشان می‌دهد؟
+
+فصل دوازدهم کتاب **Clean Code** به این سوال پاسخ می‌دهد: «چگونه می‌دانیم یک طراحی خوب است؟» رابرت مارتین در این فصل به **قوانین چهارگانه طراحی ساده (Four Rules of Simple Design)** معرفی‌شده توسط کنت بک (Kent Beck) ارجاع می‌دهد. این قوانین به ترتیب اولویت، به ما کمک می‌کنند تا طراحی‌های خوب و تمیز به‌صورت طبیعی در کد ما «پدیدار» (Emergent) شوند.
+
+در ادامه، این چهار قانون طلایی را به ترتیب اهمیت مرور می‌کنیم.
+
+## ۱. تمام تست‌ها را پاس می‌کند (Runs All the Tests)
+یک طراحی باید **قابل تأیید** باشد. وقتی سیستمی را کاملاً تست‌پذیر می‌کنید، ناخودآگاه به سمت اصول بهتر طراحی سوق داده می‌شوید؛ اصولی مانند مسئولیت واحد (SRP) و وارونگی وابستگی (DIP) که منجر به کاهش وابستگی (Low Coupling) و افزایش انسجام (High Cohesion) می‌شوند.
+
+## ۲. فاقد هرگونه تکرار است (Contains No Duplication)
+تکرار، **دشمن اصلی** طراحی خوب است. تکرار باعث افزایش کار، ریسک و پیچیدگی می‌شود. حتی تکرار چند خط کد را هم حذف کنید (مثلاً متد `isEmpty` باید بر اساس `size === 0` کار کند، نه اینکه منطق جداگانه‌ای داشته باشد). برای حذف تکرارهای ساختاری، از الگوهایی مانند **متد قالب (Template Method)** استفاده کنید.
+
+## ۳. نیت برنامه‌نویس را بیان می‌کند (Expresses the Intent of the Programmer)
+کد باید به‌راحتی توسط افرادی که آن را نگهداری می‌کنند، درک شود. این کار با موارد زیر امکان‌پذیر است:
+* انتخاب نام‌های عالی و گویا.
+* کوچک نگه داشتن توابع و کلاس‌ها.
+* استفاده از نام‌های استاندارد الگوهای طراحی (مثل `Command` یا `Visitor`).
+* نوشتن تست‌های واحدِ گویا که به‌عنوان مستندات زنده عمل می‌کنند.
+
+## ۴. تعداد کلاس‌ها و متدها را به حداقل می‌رساند (Minimizes Classes and Methods)
+سیستم را در کل کوچک و چابک نگه دارید. اما توجه کنید که این **کم‌اهمیت‌ترین** قانون است! برای رعایت این قانون، نباید دچار وسواس بی‌مورد شوید؛ مثلاً برای هر کلاس ساده‌ای یک اینترفیس غیرضروری نسازید یا فقط برای رعایت ظواهر، داده و رفتار را به زور از هم جدا نکنید.
+
+---
+
+## مثال‌های کد (JavaScript)
+
+```javascript
+// ✅ قانون ۱: تمام تست‌ها را پاس می‌کند (تست‌پذیری منجر به طراحی کوچک و بدون وابستگی می‌شود)
+class OrderProcessor {
+  constructor(paymentGateway) { // وابستگی تزریق شده برای Mock کردن و تست آسان
+    this.paymentGateway = paymentGateway;
+  }
+  process(order) {
+    return this.paymentGateway.charge(order.total);
+  }
+}
+
+// ✅ قانون ۲: فاقد تکرار (حذف تکرار در پیاده‌سازی و ساختار)
+class ShoppingCart {
+  constructor() { this.items = []; }
+  
+  // حذف تکرار در پیاده‌سازی
+  get size() { return this.items.length; }
+  get isEmpty() { return this.size === 0; } 
+}
+
+// حذف تکرار ساختاری با استفاده از الگوی Template Method
+class VacationPolicy {
+  accrueVacation() {
+    this.calculateBaseHours();
+    this.alterForLegalMinimums(); // زیرکلاس‌ها این "حفره" را پر می‌کنند
+    this.applyToPayroll();
+  }
+  calculateBaseHours() { /* منطق مشترک */ }
+  applyToPayroll() { /* منطق مشترک */ }
+  alterForLegalMinimums() { throw new Error("Must be implemented"); }
+}
+
+class USVacationPolicy extends VacationPolicy {
+  alterForLegalMinimums() { /* منطق خاص ایالات متحده */ }
+}
+
+// ✅ قانون ۳: بیان نیت برنامه‌نویس (نام‌های شفاف، توابع کوچک، الگوهای استاندارد)
+// به جای یک تابع پیچیده و درهم، از الگوی Command شفاف و گویا استفاده می‌کنیم
+class SaveUserCommand {
+  constructor(user, database) {
+    this.user = user;
+    this.database = database;
+  }
+  execute() {
+    if (this.user.isValid) {
+      this.database.save(this.user);
+    }
+  }
+}
+
+// ✅ قانون ۴: به حداقل رساندن کلاس‌ها/متدها (پرهیز از وسواس و تعصب بی‌جا)
+// ❌ بد: ساختن یک اینترفیس فقط برای یک نگهدارنده داده ساده
+// interface UserDataInterface {} 
+// class UserData implements UserDataInterface { ... }
+
+// ✅ خوب: رویکرد عمل‌گرایانه و حداقلی
+class UserData {
+  constructor(name, email) {
+    this.name = name;
+    this.email = email;
+  }
+}
+```

@@ -1,0 +1,106 @@
+---
+title: "خلاصه فصل یازدهم کتاب Clean Code: معماری سیستم‌ها و جداسازی ساختار"
+date: '2026-08-20'
+tags: ['کدتمیز', 'CleanCode', 'معماری_سیستم', 'تزریق_وابستگی', 'برنامه‌نویسی']
+description: "بررسی اصول طراحی سیستم در فصل یازدهم کتاب کد تمیز؛ از جداسازی ساختار از اجرا و تزریق وابستگی (DI) تا معماری افزایشی و زبان‌های خاص دامنه (DSL)."
+enableComment: true
+---
+
+# معماری سیستم‌ها؛ جداسازی ساختار از اجرا
+
+فصل یازدهم کتاب **Clean Code** دیدگاه ما را از سطح توابع و کلاس‌ها به سطح کل **سیستم** گسترش می‌دهد. راز اصلی نگهداری‌پذیری یک سیستم بزرگ، جدا کردن فرآیند «ساخت و سیم‌کشی اشیاء» از «منطق اجرای برنامه» است. 
+
+در ادامه، مهم‌ترین استراتژی‌های طراحی سیستم از دیدگاه رابرت مارتین را مرور می‌کنیم.
+
+## ۱. جداسازی ساختار از استفاده (Separate Construction from Use)
+* **تفکیک مسئولیت‌ها:** منطق ساخت اشیاء و پیکربندی وابستگی‌ها (Startup) باید به‌شدت از منطق زمان اجرا (Runtime) جدا شود.
+* **جداسازی تابع Main:** تمام منطق ساخت را به تابع `main` یا یک ماژول راه‌اندازی (Setup Module) اختصاصی منتقل کنید. هسته اصلی برنامه باید فرض کند که تمام اشیاء از قبل به‌درستی ساخته و آماده استفاده هستند.
+
+## ۲. کارخانه‌ها و تزریق وابستگی (Factories & DI)
+* **کارخانه‌های انتزاعی (Abstract Factories):** اگر برنامه نیاز دارد زمان دقیق ساخت اشیاء را کنترل کند، از این الگو استفاده کنید.
+* **تزریق وابستگی (Dependency Injection):** با استفاده از تزریق از طریق سازنده (Constructor) یا Setter، اشیاء را منفعل نگه دارید تا خودشان وابستگی‌هایشان را نسازند. این کار تست‌پذیری را به‌شدت افزایش می‌دهد.
+
+## ۳. دغدغه‌های مشترک و معماری افزایشی
+* **دغدغه‌های مشترک (Cross-Cutting Concerns):** مواردی مثل لاگینگ، امنیت و پایداری داده‌ها، در چندین شیء پخش می‌شوند. آن‌ها را با استفاده از برنامه‌نویسی جنب‌گرا (AOP) یا Proxyها مدیریت کنید تا هسته برنامه به‌صورت **اشیاء ساده (POJO)** و بدون وابستگی به فریم‌ورک باقی بماند.
+* **معماری افزایشی (Incremental Architecture):** برخلاف ساختمان‌سازی، معماری نرم‌افزار می‌تواند (و باید) در صورت جداسازی صحیح دغدغه‌ها، به‌صورت افزایشی از ساده به پیچیده رشد کند. از طراحی بیش‌ازحدِ اولیه (BDUF) پرهیز کنید.
+* **بهینه‌سازی تصمیم‌گیری:** تصمیمات معماری را تا «آخرین لحظه مسئولیت‌پذیر» (Last Responsible Moment) به تعویق بیندازید تا بر اساس تجربه واقعی پروژه، انتخاب‌های آگاهانه‌تری داشته باشید.
+
+## ۴. زبان‌های خاص دامنه (Domain-Specific Languages - DSL)
+با استفاده از APIهای روان (Fluent APIs) یا زبان‌های اسکریپت‌نویسی کوچک، سطح انتزاع را بالا ببرید. هدف این است که کد مانند یک **نثر ساختاریافته** خوانده شود که حتی متخصصان غیرفنی دامنه (Domain Experts) نیز بتوانند آن را درک کنند.
+
+---
+
+## مثال‌های کد (JavaScript)
+
+```javascript
+// ❌ بد: ترکیب ساختار و اجرا، وابستگی شدید، بدون تزریق وابستگی
+class OrderService {
+  constructor() {
+    // مقداردهی تنبل (Lazy initialization)، ساختار را با منطق اجرا مخلوط می‌کند
+    // وابستگی سخت‌کد شده، اصل DIP را نقض می‌کند
+    this.database = new ConcreteSQLDatabase(); 
+  }
+
+  processOrder(order) {
+    if (!this.database) this.database = new ConcreteSQLDatabase();
+    this.database.save(order);
+    console.log(`Order ${order.id} processed`); // دغدغه مشترک (لاگینگ) با منطق اصلی مخلوط شده
+  }
+}
+
+
+// ✅ تمیز: جداسازی دغدغه‌ها، تزریق وابستگی، اشیاء ساده (POJO) و یک DSL کوچک
+
+// ۱. شیء خالص (معادل POJO): بدون وابستگی به فریم‌ورک، با مسئولیت واحد
+class Order {
+  constructor(id, items) {
+    this.id = id;
+    this.items = items;
+  }
+}
+
+class OrderService {
+  // وابستگی تزریق می‌شود، نه اینکه در داخل کلاس ساخته شود
+  constructor(database, logger) {
+    this.database = database;
+    this.logger = logger;
+  }
+
+  processOrder(order) {
+    this.database.save(order);
+    this.logger.info(`Order ${order.id} processed`);
+  }
+}
+
+// ۲. جداسازی Main: سیم‌کشی وابستگی‌ها کاملاً خارج از منطق اصلی انجام می‌شود
+function main() {
+  const db = new MockDatabase(); // به‌راحتی برای تست یا محیط تولید قابل جایگزینی است
+  const logger = new ConsoleLogger();
+  
+  const orderService = new OrderService(db, logger);
+  const myOrder = new Order(1, ["Laptop", "Mouse"]);
+  
+  orderService.processOrder(myOrder);
+}
+
+// ۳. مثال زبان خاص دامنه (DSL) / API روان (Fluent API)
+class QueryBuilder {
+  constructor(table) { 
+    this.table = table; 
+    this.conditions = []; 
+  }
+  where(field, value) { 
+    this.conditions.push(`${field} = '${value}'`); 
+    return this; // بازگرداندن this برای زنجیره‌سازی متدها
+  }
+  build() { 
+    return `SELECT * FROM ${this.table} WHERE ${this.conditions.join(' AND ')}`; 
+  }
+}
+
+// خوانده می‌شود مانند یک متن ساده و گویا (DSL)
+const sql = new QueryBuilder("users")
+  .where("status", "active")
+  .where("age", ">18")
+  .build();
+```

@@ -29,10 +29,10 @@ export default async function TagPage(props: TagPageProps) {
 
     return (
         <>
-            <h1>Posts Tagged with &quot;{decodedTag}&quot;</h1>
+            <h1>پست با تگ &quot;{decodedTag}&quot;</h1>
             <Posts tags={[decodedTag]}/>
 
-            <h2>More tags</h2>
+            <h2>تگ های بیشتر</h2>
             <Tags/>
         </>
     )

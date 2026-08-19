@@ -8,7 +8,7 @@ import {Layout} from "nextra-theme-blog";
 import {Inter} from 'next/font/google';
 
 export const metadata: Metadata = {
-    title: 'Nextra Blog'
+    title: 'itshomayoun'
 }
 
 const bodyFont = Inter({

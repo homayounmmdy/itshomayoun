@@ -4,7 +4,7 @@ const CONFIG = {
     title: 'My Blog',
     siteUrl: 'https://your-domain.com',
     description: 'Latest blog posts',
-    lang: 'en-us'
+    lang: 'fa'
 }
 
 export async function GET() {

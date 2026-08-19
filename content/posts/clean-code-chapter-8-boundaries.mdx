@@ -1,0 +1,80 @@
+---
+title: "خلاصه فصل هشتم کتاب Clean Code: مدیریت مرزها (Boundaries)"
+date: '2026-08-20'
+tags: ['کدتمیز', 'CleanCode', 'مرزها', 'معماری_نرم‌افزار', 'برنامه‌نویسی']
+description: "بررسی اصول مدیریت مرزها در فصل هشتم کتاب کد تمیز؛ از پوشش‌دهی APIهای خارجی و الگوی آداپتر تا تست‌های یادگیری."
+enableComment: true
+---
+
+# مدیریت مرزها؛ حفاظت از کد در برابر دنیای خارج
+
+فصل هشتم کتاب **Clean Code** به یکی از چالش‌برانگیزترین بخش‌های توسعه نرم‌افزار می‌پردازد: **مدیریت مرزها (Boundaries)**. وقتی کد ما با کتابخانه‌های خارجی، APIهای شخص ثالث یا سیستم‌های ناتمام تعامل دارد، چگونه می‌توانیم از تغییرات ناگهانی و شکست‌های آن‌ها در امان بمانیم؟
+
+در ادامه، مهم‌ترین استراتژی‌های مدیریت مرز از دیدگاه رابرت مارتین را مرور می‌کنیم.
+
+## ۱. اصول کلیدی مدیریت مرز
+* **پوشش‌دهی رابط‌های خارجی (Wrap Third-Party Interfaces):** تایپ‌های خارجی (مثل `Map` عمومی یا آبجکت‌های کتابخانه‌ای) را در کل سیستم پخش نکنید. آن‌ها قابلیت‌های زیادی را افشا می‌کنند و در برابر تغییرات (Breaking Changes) شکننده‌اند. به جای آن، آن‌ها را در کلاسی سفارشی بپیچید (Wrap) که **فقط** آنچه برنامه شما نیاز دارد را نمایش دهد.
+* **تست‌های یادگیری (Learning Tests):** برای درک و مستندسازی نحوه کار یک API خارجی، تست بنویسید. این تست‌ها درک شما را تأیید می‌کنند و به عنوان یک **شبکه ایمنی (Safety Net)** برای شناسایی تغییرات مخرب هنگام به‌روزرسانی کتابخانه عمل می‌کنند.
+* **رابطی را تعریف کنید که آرزویش را دارید:** وقتی به کدهای ناشناخته یا ناتمام وابسته هستید، رابط (Interface) ایده‌آل خودتان را بسازید. کد برنامه را بر اساس این رابط تمیز بنویسید و بعداً یک **آداپتر (Adapter)** برای اتصال آن به API واقعی خارجی بسازید.
+* **به حداقل رساندن مواجهه با مرز (Minimize Boundary Exposure):** تمام ارجاعات به کد شخص ثالث را به چند کلاس Wrapper یا Adapter محدود کنید. به چیزی وابسته شوید که خودتان کنترل می‌کنید، تا تغییرات خارجی، کدبیس شما را کنترل نکنند.
+
+---
+
+## مثال‌های کد (JavaScript)
+
+```javascript
+// ❌ بد: نشت رابط‌های شخص ثالث در کل اپلیکیشن
+// اپلیکیشن اکنون به شدت به ساختار پاسخ API خارجی و یک Map عمومی وابسته است
+// که تغییرات آینده را پرهزینه می‌کند.
+function processSensorData(sensorMap, externalApiClient) {
+  const rawSensor = sensorMap.get("sensor-1"); // نشت Map عمومی
+  const data = externalApiClient.fetchData(rawSensor.id); // وابستگی مستقیم به شخص ثالث
+  return data.value;
+}
+
+
+// ✅ تمیز: پوشش‌دهی کد خارجی و تعریف رابط‌های ایده‌آل
+
+// ۱. رابط ایده‌آل (چیزی که آرزویش را داریم)
+class Transmitter {
+  transmit(frequency, dataStream) {
+    throw new Error("Method must be implemented");
+  }
+}
+
+// ۲. آداپتر (پل ارتباطی بین رابط ایده‌آل ما و API خارجی/ناشناخته)
+class ExternalTransmitterAdapter extends Transmitter {
+  constructor(externalLib) {
+    super();
+    this.externalLib = externalLib;
+  }
+
+  transmit(frequency, dataStream) {
+    // جزئیات زشت و پیچیده API شخص ثالث فقط در یک جا کپسوله می‌شود
+    this.externalLib.setFreq(frequency);
+    this.externalLib.sendStream(dataStream);
+  }
+}
+
+// ۳. Wrapper (پنهان کردن تایپ‌های خارجی و نمایش فقط آنچه اپلیکیشن نیاز دارد)
+class SensorManager {
+  constructor() {
+    this.sensors = new Map(); // Map به صورت داخلی پنهان است
+  }
+
+  getSensor(id) {
+    return this.sensors.get(id); // دسترسی تمیز و تایپ‌شده بدون افشای Map
+  }
+
+  addSensor(id, sensorData) {
+    this.sensors.set(id, sensorData);
+  }
+}
+
+// ۴. تست یادگیری (تأیید رفتار شخص ثالث)
+// test('external logger outputs to console', () => {
+//   const logger = new ThirdPartyLogger();
+//   logger.init({ output: 'console' });
+//   expect(logger.info("hello")).toContain("hello");
+// });
+```

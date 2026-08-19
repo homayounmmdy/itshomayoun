@@ -1,0 +1,83 @@
+---
+title: "خلاصه فصل چهاردهم کتاب Clean Code: پالایش پی‌درپی (Successive Refinement)"
+date: '2026-08-20'
+tags: ['کدتمیز', 'CleanCode', 'ریفکتورینگ', 'پلی‌مورفیسم', 'برنامه‌نویسی']
+description: "بررسی فرآیند پالایش پی‌درپی در فصل چهاردهم کتاب کد تمیز؛ از نوشتن پیش‌نویس اولیه و گام‌های کوچک TDD تا جایگزینی شرط‌های نوع با پلی‌مورفیسم."
+enableComment: true
+---
+
+# پالایش پی‌درپی؛ کد تمیز یک‌شبه ساخته نمی‌شود
+
+فصل چهاردهم کتاب **Clean Code** یک حقیقت مهم را یادآوری می‌کند: **کد تمیز به‌ندرت در اولین تلاش به‌طور کامل و بی‌نقص نوشته می‌شود.** هنر واقعی برنامه‌نویسی در نوشتن یک پیش‌نویس اولیه (Rough Draft) و سپس پالایش (Refine) و تمیز کردن تدریجی و پی‌درپی آن است.
+
+در ادامه، مهم‌ترین اصول این فرآیند تحول کد از دیدگاه رابرت مارتین را مرور می‌کنیم.
+
+## ۱. اصول کلیدی پالایش کد
+* **پالایش پی‌درپی (Successive Refinement):** ابتدا کدی بنویسید که «کار کند»، سپس بدون توقف، آن را بازخوانی، شکستن، تغییر نام و کوچک کنید تا به سطح مطلوب برسد.
+* **گام‌های کوچک با TDD (Incrementalism with TDD):** ریفکتورینگ را در گام‌های بسیار کوچک و تدریجی انجام دهید. همیشه تست‌های خودکار خود را در حالت «پاس‌شده» (Passing) نگه دارید تا اطمینان حاصل کنید سیستم حین تغییرات ساختاری از کار نمی‌افتد.
+* **پلی‌مورفیسم به جای بررسی نوع (Polymorphism over Type-Checking):** شرط‌های `if/else` یا `switch` برای بررسی نوع داده (مثل `if isBoolean ... else if isString`) را با رابط‌های پلی‌مورفیک جایگزین کنید. این کار حذف «تعیین نوع دستی» را ممکن ساخته و افزودن انواع جدید را بسیار آسان می‌کند (رعایت اصل Open/Closed).
+* **اصل مسئولیت واحد (SRP):** دغدغه‌ها را جدا کنید. منطق خاصِ هر نوع داده را به کلاس‌های اختصاصی (مثل `ArgumentMarshaler`) منتقل کنید و مدیریت خطا را به کلاس استثناهای خودش (مثل `ArgsException`) بسپارید.
+
+> 💡 **نتیجه‌گیری نهایی:** کدی که «فقط کار می‌کند» (Working Code) کافی نیست. باید به‌طور مداوم کد را تمیز و ساده نگه دارید تا از پوسیدن و تبدیل شدن به یک آشوب غیرقابل نگهداری جلوگیری کنید.
+
+---
+
+## مثال‌های کد (JavaScript)
+
+```javascript
+// ❌ قبل از پالایش: پیش‌نویس اولیه (شلوغ، نقض SRP، سخت برای توسعه)
+class Args {
+  constructor() {
+    this.boolArgs = new Map();
+    this.stringArgs = new Map();
+  }
+
+  // افزودن یک نوع جدید نیازمند تغییر این متد است (نقض اصل Open/Closed)
+  setArg(char, value, type) {
+    if (type === 'bool') {
+      this.boolArgs.set(char, value === 'true');
+    } else if (type === 'string') {
+      this.stringArgs.set(char, value);
+    }
+  }
+}
+
+
+// ✅ بعد از پالایش: پلی‌مورفیک، رعایت SRP، و آسان برای توسعه
+// ۱. رابط اختصاصی برای منطق خاصِ هر نوع داده
+class ArgumentMarshaler {
+  set(value) { throw new Error("Must be implemented"); }
+  get() { throw new Error("Must be implemented"); }
+}
+
+// ۲. پیاده‌سازی‌های خاص، تجزیه و خطاهای خود را مدیریت می‌کنند
+class BooleanMarshaler extends ArgumentMarshaler {
+  constructor() { super(); this.value = false; }
+  set() { this.value = true; }
+  get() { return this.value; }
+}
+
+class StringMarshaler extends ArgumentMarshaler {
+  constructor() { super(); this.value = ""; }
+  set(value) { this.value = value; }
+  get() { return this.value; }
+}
+
+// ۳. کلاس اصلی تمیز است، از یک Map واحد استفاده می‌کند و به پلی‌مورفیسم متکی است
+class Args {
+  constructor() {
+    this.marshalers = new Map(); 
+  }
+
+  registerArg(char, marshaler) {
+    this.marshalers.set(char, marshaler);
+  }
+
+  setArg(char, value) {
+    const marshaler = this.marshalers.get(char);
+    if (marshaler) {
+      marshaler.set(value); // دیگر هیچ if/else برای بررسی نوع نیاز نیست!
+    }
+  }
+}
+```

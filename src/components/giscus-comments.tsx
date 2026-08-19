@@ -17,7 +17,7 @@ const GiscusComments = () => {
             emitMetadata="0"
             inputPosition="top"
             theme="preferred_color_scheme"
-            lang="en"
+            lang="fa"
             loading="lazy"
         />
     );

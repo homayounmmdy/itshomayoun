@@ -1,0 +1,108 @@
+---
+title: "خلاصه فصل پانزدهم کتاب Clean Code: هنر پالایش نهایی و مطالعه موردی"
+date: '2026-08-20'
+tags: ['کدتمیز', 'CleanCode', 'ریفکتورینگ', 'مطالعه_موردی', 'برنامه‌نویسی']
+description: "بررسی اصول پالایش نهایی در فصل پانزدهم کتاب کد تمیز؛ از قانون پسر پیشاهنگ و حذف وابستگی زمانی تا شفاف‌سازی نیت و ساده‌سازی منطق."
+enableComment: true
+---
+
+# پالایش نهایی؛ کد تمیز یک فرآیند است، نه یک مقصد
+
+فصل پانزدهم کتاب **Clean Code** (که اغلب به عنوان یک مطالعه موردی عمیق از ریفکتورینگ، مانند بررسی داخلی JUnit، شناخته می‌شود) به ما یادآوری می‌کند که کد تمیز به‌ندرت در اولین تلاش خلق می‌شود. هنر واقعی برنامه‌نویسی در **پالایش تکرارشونده (Iterative Refactoring)** و شجاعانه بازگشتن از تصمیمات قبلی، به‌محض ظهور انتزاعات (Abstractions) بهتر است.
+
+در ادامه، مهم‌ترین اصول عملی برای تبدیل یک کد «کارکننده» به یک کد «تمیز و حرفه‌ای» را مرور می‌کنیم.
+
+## ۱. اصول کلیدی پالایش کد
+* **قانون پسر پیشاهنگ (The Boy Scout Rule):** همیشه کد را تمیزتر از آنچه تحویل گرفته‌اید، تحویل دهید. حتی کدهای به‌ظاهر خوب هم جای بهبود دارند.
+* **شفاف‌سازی نیت (Clarify Intent):** شرط‌های پیچیده و تو در تو را در متدهایی با نام‌های گویا (مثل `shouldBeCompacted()`) کپسوله کنید. از پیشوندهای اضافی و منسوخ (مثل `f` برای فیلد) که IDEهای مدرن خودشان مدیریت می‌کنند، بپرهیزید.
+* **حذف وابستگی زمانی (Eliminate Temporal Coupling):** اگر توابعی وجود دارند که *باید* به ترتیب خاصی فراخوانی شوند، آن‌ها را در یک متد واحد ترکیب کنید یا وابستگی‌ها را به‌صورت صریح منتقل کنید تا این نیازمندی برای خواننده کاملاً آشکار باشد.
+* **ساده‌سازی منطق (Simplify Logic):** آفست‌های ریاضی غیرضروری (مثل `+1` یا `-1` برای جبران نام‌گذاری بد متغیرها) و دستورهای `if` اضافی را حذف کنید. توابع را به‌صورت منطقی گروه‌بندی کنید (مثلاً ابتدا تحلیل، سپس سنتز و قالب‌بندی نهایی) تا جریان توپولوژیک کد بهبود یابد.
+
+---
+
+## مثال‌های کد (JavaScript)
+
+```javascript
+// ❌ قبل از پالایش: وابستگی زمانی، پیشوندهای اضافی، شرط‌های مبهم و آفست‌های جادویی
+class StringCompactor {
+  constructor(fContext, fExpected, fActual) {
+    this.fContext = fContext;
+    this.fExpected = fExpected;
+    this.fActual = fActual;
+    this.fPrefix = 0;
+    this.fSuffix = 0;
+  }
+
+  compact(msg) {
+    // شرط پیچیده و کپسوله‌نشده
+    if (this.fExpected == null || this.fActual == null || this.fExpected === this.fActual) {
+      return msg;
+    }
+    
+    // وابستگی زمانی: findPrefix حتماً باید قبل از findSuffix صدا زده شود!
+    this.findPrefix(); 
+    this.findSuffix();
+    
+    // آفست +1 غیرضروری به دلیل نام‌گذاری ضعیف متغیرها
+    return this.fExpected.substring(this.fPrefix, this.fExpected.length - this.fSuffix + 1);
+  }
+}
+
+
+// ✅ بعد از پالایش: نیت شفاف، بدون وابستگی زمانی، منطق ساده‌شده
+class StringCompactor {
+  constructor(context, expected, actual) {
+    this.context = context;
+    this.expected = expected;
+    this.actual = actual;
+  }
+
+  formatComparison(message) {
+    if (this.shouldBeCompacted()) {
+      const { prefixLength, suffixLength } = this.findCommonBoundaries();
+      return this.buildCompactString(prefixLength, suffixLength);
+    }
+    return message;
+  }
+
+  // کپسوله‌سازی شرط برای شفاف‌سازی نیت
+  shouldBeCompacted() {
+    return this.expected != null && this.actual != null && this.expected !== this.actual;
+  }
+
+  // ترکیب مراحل وابسته به هم برای حذف کامل وابستگی زمانی
+  findCommonBoundaries() {
+    let prefixLength = 0;
+    const end = Math.min(this.expected.length, this.actual.length);
+    
+    while (prefixLength < end && this.expected[prefixLength] === this.actual[prefixLength]) {
+      prefixLength++;
+    }
+
+    let suffixLength = 0;
+    while (!this.suffixOverlapsPrefix(suffixLength, prefixLength)) {
+      if (this.charFromEnd(this.expected, suffixLength) !== this.charFromEnd(this.actual, suffixLength)) {
+        break;
+      }
+      suffixLength++;
+    }
+
+    return { prefixLength, suffixLength };
+  }
+
+  // آفست تمیز -1 که نیاز به جادوهای +1 در سایر نقاط کد را از بین می‌برد
+  charFromEnd(s, i) {
+    return s[s.length - i - 1]; 
+  }
+
+  suffixOverlapsPrefix(suffixLength, prefixLength) {
+    return this.actual.length - suffixLength <= prefixLength || 
+           this.expected.length - suffixLength <= prefixLength;
+  }
+
+  // سنتز ساده‌شده: بدون بررسی‌های if اضافی برای طول رشته
+  buildCompactString(prefixLength, suffixLength) {
+    return `[${this.expected.substring(prefixLength, this.expected.length - suffixLength)}]`;
+  }
+}
+```
