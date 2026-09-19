@@ -1,0 +1,148 @@
+---
+title: "چک‌لیست سریع a11y: فرم‌ها و ورودی‌ها (Forms & Inputs)"
+date: '2026-09-23'
+tags: ['a11y', 'Accessibility', 'Forms', 'Inputs', 'WCAG', 'React', 'aria-describedby']
+description: "چرا فرم‌های بدون label درست، پیام خطای بی‌ربط و placeholder به جای label، بخشی از کاربران رو کاملاً از ارسال فرم محروم می‌کنه."
+enableComment: true
+---
+
+# 📝 چک‌لیست سریع: فرم‌ها و ورودی‌ها (Forms & Inputs)
+
+**💡 مفهوم کلیدی**  
+فرم‌ها مهم‌ترین بخش تعاملی سایت هستن (ورود، ثبت‌نام، پرداخت). اگر کاربر اسکرین‌ریدر نفهمه هر اینپوت برای چیه، یا پیام خطا رو نبینه، **کلاً نمی‌تونه از سایتت استفاده کنه**.
+
+**⚠️ دام رایج**  
+- استفاده از `placeholder` به جای `<label>` (با پاک شدن متن، کاربر یادش میره چی باید بنویسه).
+- `<label>` بدون `htmlFor` یا اینپوت بدون `id`.
+- پیام خطا که فقط با رنگ قرمز نشون داده میشه و به اینپوت متصل نیست.
+- گروه‌های radio button بدون `<fieldset>` و `<legend>`.
+- عدم استفاده از `autocomplete` برای فیلدهای استاندارد.
+
+**📏 استاندارد WCAG**  
+- **SC 1.3.1 (Level A)**: اطلاعات و روابط (مثل label-input) باید قابل برنامه‌نویسی تعیین بشن.
+- **SC 3.3.1 (Level A)**: خطاهای ورودی باید به صورت متنی شناسایی و توصیف بشن.
+- **SC 3.3.2 (Level A)**: فیلدها باید label یا دستورالعمل داشته باشن.
+- **SC 1.4.11 (Level AA)**: حاشیه‌ی اینپوت‌ها باید کنتراست حداقل 3:1 داشته باشن.
+
+**🛠️ راه‌حل سریع در کد**
+
+### ۱. اتصال label به input (حیاتی!)
+```jsx
+// ❌ اشتباه: label بدون ارتباط با input
+<label>ایمیل</label>
+<input type="email" />
+
+// ❌ اشتباه: placeholder به جای label
+<input type="email" placeholder="ایمیل خود را وارد کنید" />
+
+// ✅ درست: label با htmlFor و input با id یکسان
+<label htmlFor="user-email">ایمیل</label>
+<input id="user-email" type="email" />
+
+// ✅ درست: label دور input (بدون نیاز به htmlFor)
+<label>
+  ایمیل
+  <input type="email" />
+</label>
+```
+
+### ۲. پیام خطا با aria-describedby
+```jsx
+// ❌ اشتباه: پیام خطا بی‌ربط به اینپوت
+<input type="email" />
+<p className="error">ایمیل نامعتبر است</p>
+
+// ✅ درست: اتصال پیام خطا به اینپوت
+function EmailField({ error }) {
+  const inputId = 'email';
+  const errorId = 'email-error';
+  
+  return (
+    <div>
+      <label htmlFor={inputId}>ایمیل</label>
+      <input
+        id={inputId}
+        type="email"
+        aria-invalid={!!error}
+        aria-describedby={error ? errorId : undefined}
+      />
+      {error && (
+        <p id={errorId} role="alert" className="error">
+          {error}
+        </p>
+      ))
+    </div>
+  );
+}
+```
+
+### ۳. فیلدهای ضروری
+```jsx
+// ❌ اشتباه: کاربر نمی‌فهمه کدوم فیلد اجباریه
+<input type="text" />
+
+// ✅ درست: با required و اعلام به اسکرین‌ریدر
+<label htmlFor="name">
+  نام <span aria-hidden="true">*</span>
+</label>
+<input 
+  id="name" 
+  type="text" 
+  required 
+  aria-required="true" 
+/>
+```
+
+### ۴. گروه‌بندی radio/checkbox
+```jsx
+// ❌ اشتباه: radio های بی‌نام
+<input type="radio" name="gender" value="male" /> مرد
+<input type="radio" name="gender" value="female" /> زن
+
+// ✅ درست: با fieldset و legend
+<fieldset>
+  <legend>جنسیت</legend>
+  <label>
+    <input type="radio" name="gender" value="male" />
+    مرد
+  </label>
+  <label>
+    <input type="radio" name="gender" value="female" />
+    زن
+  </label>
+</fieldset>
+```
+
+### ۵. autocomplete برای پرکردن خودکار
+```jsx
+// ❌ اشتباه: مرورگر نمی‌تونه فرم رو خودکار پر کنه
+<input type="text" name="name" />
+<input type="text" name="phone" />
+
+// ✅ درست: با autocomplete استاندارد
+<input type="text" name="name" autoComplete="name" />
+<input type="email" name="email" autoComplete="email" />
+<input type="tel" name="phone" autoComplete="tel" />
+<input type="text" name="address" autoComplete="street-address" />
+```
+
+### ۶. اینپوت‌های جستجو و آیکون
+```jsx
+// ❌ اشتباه: اینپوت بدون label و فقط با آیکون
+<input type="search" placeholder="🔍" />
+
+// ✅ درست: با aria-label وقتی label بصری وجود نداره
+<input 
+  type="search" 
+  aria-label="جستجو در سایت" 
+  placeholder="جستجو..." 
+/>
+```
+
+**🔗 ابزار تست**  
+- افزونه مرورگر **WAVE** → بخش "Form Labels".
+- **Lighthouse** → Accessibility → "Form elements have associated labels".
+- **axe DevTools** → چک خودکار label و aria.
+- تست دستی: با Tab بین اینپوت‌ها حرکت کن؛ اسکرین‌ریدر باید نام هر فیلد رو بخونه.
+
+> **قانون ۳ ثانیه‌ای:** توی DevTools روی اینپوت کلیک کن و در پنل Accessibility ببین **Name** چیه. اگر خالی بود یا چیز بی‌معنی مثل `textbox` بود، یعنی label درست نداری!
