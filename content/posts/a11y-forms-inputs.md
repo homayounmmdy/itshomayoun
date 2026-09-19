@@ -1,0 +1,165 @@
+---
+title: "چک‌لیست سریع a11y: ناوبری کیبوردی و مدیریت فوکوس"
+date: '2026-09-23'
+tags: ['a11y', 'Accessibility', 'Keyboard-Navigation', 'Focus-Management', 'WCAG', 'Focus-Trap', 'React']
+description: "چرا حذف outline، مودال‌های بدون Focus Trap و tabIndex مثبت، کاربرای کیبوردی رو کاملاً از سایتت محروم می‌کنه و چطور این مشکل رو حل کنیم."
+enableComment: true
+---
+
+# ⌨️ چک‌لیست سریع: ناوبری کیبوردی و مدیریت فوکوس (Keyboard Navigation & Focus Management)
+
+**💡 مفهوم کلیدی**  
+کاربرانی که از ماوس استفاده نمی‌کنن (معلولیت حرکتی، کاربران کیبوردی حرفه‌ای، یا کسانی که فقط با Tab کار می‌کنن) برای تعامل با سایتت **فقط به کیبورد وابسته‌ان**. اگر فوکوس گم بشه، توی مودال گیر کنه، یا اصلاً قابل مشاهده نباشه، این کاربران **کاملاً قفل میشن**.
+
+**⚠️ دام رایج**  
+- `outline: none` روی همه‌چیز به خاطر "زشت بودن" فوکوس رینگ.
+- مودالی که با Escape بسته نمیشه یا فوکوس پشتش گیر می‌کنه.
+- `tabIndex={5}` برای "رسیدن سریع‌تر به یه عنصر".
+- `<div onClick>` که با Enter یا Space کار نمی‌کنه.
+- بعد از بسته شدن مودال، فوکوس به ابتدای صفحه می‌پره.
+- منوی همبرگری که باز میشه ولی Tab به آیتم‌های داخلش نمیره.
+
+**📏 استاندارد WCAG**  
+- **SC 2.1.1 (Level A)**: تمام عملکردها باید با کیبورد قابل دسترسی باشن.
+- **SC 2.1.2 (Level A)**: فوکوس نباید روی یه عنصر قفل بشه (No Keyboard Trap).
+- **SC 2.4.3 (Level A)**: ترتیب فوکوس باید معنای عملیات رو حفظ کنه.
+- **SC 2.4.7 (Level AA)**: فوکوس باید همیشه قابل مشاهده باشه.
+
+**🛠️ راه‌حل سریع در کد**
+
+### ۱. فوکوس رینگ درست (نه حذف!)
+```css
+/* ❌ اشتباه: حذف کامل outline */
+*:focus {
+  outline: none;
+}
+
+/* ✅ درست: focus-visible فقط برای کیبورد (نه کلیک ماوس) */
+button:focus-visible,
+a:focus-visible,
+input:focus-visible {
+  outline: 3px solid #2563EB;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+```
+
+### ۲. tabIndex درست
+```jsx
+// ❌ اشتباه: tabIndex مثبت (ترتیب DOM رو بهم می‌ریزه)
+<button tabIndex={5}>دکمه مهم</button>
+
+// ✅ درست: tabIndex=0 برای اضافه کردن به ترتیب طبیعی
+<div tabIndex={0} role="button">عنصر قابل فوکوس</div>
+
+// ✅ درست: tabIndex=-1 برای فوکوس برنامه‌نویسی (نه با Tab)
+<div tabIndex={-1} ref={headingRef}>عنوان جدید</div>
+```
+
+### ۳. Focus Trap در مودال
+```jsx
+import { useEffect, useRef } from 'react';
+
+function Modal({ isOpen, onClose, children }) {
+  const modalRef = useRef(null);
+  const previousFocus = useRef(null);
+
+  useEffect(() => {
+    if (isOpen) {
+      // ✅ ذخیره‌ی فوکوس قبلی
+      previousFocus.current = document.activeElement;
+      
+      // ✅ انتقال فوکوس به مودال
+      modalRef.current?.focus();
+    } else {
+      // ✅ بازگرداندن فوکوس به عنصر بازکننده
+      previousFocus.current?.focus();
+    }
+  }, [isOpen]);
+
+  // ✅ قفل کردن Tab داخل مودال
+  const handleKeyDown = (e) => {
+    if (e.key === 'Escape') {
+      onClose();
+      return;
+    }
+    
+    if (e.key === 'Tab') {
+      const focusable = modalRef.current?.querySelectorAll(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+      );
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last?.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first?.focus();
+      }
+    }
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <div 
+      ref={modalRef} 
+      tabIndex={-1} 
+      role="dialog" 
+      aria-modal="true"
+      onKeyDown={handleKeyDown}
+    >
+      {children}
+    </div>
+  );
+}
+```
+
+### ۴. دکمه‌های سفارشی با کیبورد
+```jsx
+// ❌ اشتباه: div با onClick فقط با ماوس کار می‌کنه
+<div onClick={handleClick} className="btn">کلیک</div>
+
+// ✅ درست: استفاده از button بومی
+<button onClick={handleClick} className="btn">کلیک</button>
+
+// ✅ درست: اگه مجبوری از div استفاده کنی
+<div 
+  role="button"
+  tabIndex={0}
+  onClick={handleClick}
+  onKeyDown={(e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault(); // جلوگیری از اسکرول با Space
+      handleClick();
+    }
+  }}
+  className="btn"
+>
+  کلیک
+</div>
+```
+
+### ۵. انتقال فوکوس بعد از تغییر محتوا
+```jsx
+// ✅ بعد از حذف آیتم، فوکوس رو به جای معناداری ببر
+function DeleteItem({ id, onDelete }) {
+  const handleDelete = () => {
+    onDelete(id);
+    // ✅ انتقال فوکوس به پیام موفقیت یا آیتم بعدی
+    document.getElementById('success-message')?.focus();
+  };
+
+  return <button onClick={handleDelete}>حذف</button>;
+}
+```
+
+**🔗 ابزار تست**  
+- **تست دستی**: ماوس رو کنار بذار و فقط با `Tab`, `Shift+Tab`, `Enter`, `Space`, `Escape` کار کن.
+- **Chrome DevTools** → Rendering → "Emulate a focused page" برای دیدن فوکوس رینگ.
+- افزونه **Accessibility Insights** → بخش "Keyboard navigation".
+- **Taba11y**: کتابخانه‌ای برای ویژوالایز کردن ترتیب Tab.
+
+> **قانون ۳ ثانیه‌ای:** ماوس رو بردار، فقط با Tab توی سایتت حرکت کن. مودال باز کن و ببین فوکوس توش می‌چرخه یا به پشتش فرار می‌کنه؟ Escape بزن و ببین فوکوس برمی‌گرده به دکمه‌ی بازکننده؟ اگر نه، Focus Management نداری!
