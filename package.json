@@ -11,6 +11,8 @@
     "@tabler/icons-react": "^3.35.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "fast-glob": "^3.3.3",
+    "gray-matter": "^4.0.3",
     "lucide-react": "^0.548.0",
     "next": "^16.0.1",
     "next-view-transitions": "^0.3.4",
