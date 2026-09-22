@@ -1,0 +1,84 @@
+---
+title: "چک‌لیست سریع a11y: اهداف لمسی و زوم (Touch Target & Zoom)"
+date: '2026-09-23'
+tags: ['a11y', 'Accessibility', 'Touch-Target', 'Zoom', 'WCAG', 'Mobile', 'Responsive']
+description: "چرا دکمه‌های ۲۰ پیکسلی و غیرفعال کردن زوم، بخشی از کاربران رو کاملاً از سایتت محروم می‌کنه و چطور این مشکل رو حل کنیم."
+enableComment: true
+---
+
+# 👆 چک‌لیست سریع: اهداف لمسی و زوم (Touch Target & Zoom)
+
+**💡 مفهوم کلیدی**  
+دو مشکل بزرگ در موبایل و برای کاربران کم‌بینا:  
+۱. دکمه‌ها/لینک‌هایی که آنقدر کوچک یا نزدیک به هم هستند که با انگشت نمی‌شه دقیق روشون زد.  
+۲. سایت‌هایی که زوم کردن رو غیرفعال کردن یا با زوم کردن لی‌اوت می‌شکنه.
+
+**⚠️ دام رایج**  
+- آیکون‌های شبکه‌های اجتماعی با اندازه‌ی ۱۶×۱۶ پیکسل.
+- لینک‌های متنی چسبیده به هم بدون فاصله (مثل "ویرایش | حذف").
+- اضافه کردن `user-scalable=no` یا `maximum-scale=1` در viewport meta.
+- استفاده از `font-size` ثابت با `px` که با زوم بزرگ نمیشه.
+
+**📏 استاندارد WCAG**  
+- **حداقل اندازه هدف لمسی**: ۲۴×۲۴ پیکسل (WCAG 2.2 Level AA) و ترجیحاً ۴۴×۴۴ (Level AAA).
+- **زوم**: کاربر باید بتونه تا **۲۰۰٪** زوم کنه بدون اینکه محتوا قطع بشه یا نیاز به اسکرول افقی پیدا کنه (SC 1.4.4).
+- **غیرفعال نکردن زوم**: هرگز `user-scalable=no` نذار.
+
+**🛠️ راه‌حل سریع در کد**
+
+### ۱. هدف لمسی کافی
+```css
+/* ❌ اشتباه: آیکون ۱۶ پیکسلی بدون padding */
+.icon-btn {
+  width: 16px;
+  height: 16px;
+}
+
+/* ✅ درست: منطقه‌ی کلیکی ۴۴×۴۴ حتی اگر آیکون کوچک باشه */
+.icon-btn {
+  min-width: 44px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px; /* ✅ فاصله‌ی امن بین دکمه‌های کناری */
+}
+```
+
+### ۲. viewport درست
+```html
+<!-- ❌ اشتباه: زوم رو قفل می‌کنه -->
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+
+<!-- ✅ درست: اجازه‌ی زوم کامل -->
+<meta name="viewport" content="width=device-width, initial-scale=1">
+```
+
+### ۳. فاصله بین لینک‌های کناری
+```jsx
+// ❌ اشتباه: لینک‌ها چسبیده به هم
+<a href="/edit">ویرایش</a>
+<a href="/delete">حذف</a>
+
+// ✅ درست: با فاصله یا در دکمه‌های مجزا
+<div className="flex gap-4">
+  <button className="min-h-[44px] px-4">ویرایش</button>
+  <button className="min-h-[44px] px-4">حذف</button>
+</div>
+```
+
+### ۴. استفاده از واحدهای نسبی
+```css
+/* ❌ اشتباه: فونت با px ثابت */
+.title { font-size: 16px; }
+
+/* ✅ درست: با rem که به تنظیمات کاربر احترام می‌ذاره */
+.title { font-size: 1.25rem; }
+```
+
+**🔗 ابزار تست**  
+- **Chrome DevTools** → Rendering → Enable CSS overview (برای بررسی اندازه‌ها).
+- **Lighthouse** → بخش Accessibility → چک "Touch targets are sized appropriately".
+- تست دستی: روی موبایل واقعی با انگشت شست امتحان کن!
+
+> **قانون ۳ ثانیه‌ای:** سایت رو روی موبایل باز کن، با انگشت شست روی یه دکمه‌ی کوچک بزن. اگر ۲ بار از ۳ بار اشتباه زدی (یا روی دکمه‌ی کناری رفتی)، یعنی Touch Target مشکل داره. بعد `Ctrl +` رو ۳ بار بزن؛ اگر لی‌اوت شکست، یعنی مشکل Zoom داری.

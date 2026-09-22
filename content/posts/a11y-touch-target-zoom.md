@@ -1,0 +1,108 @@
+---
+title: "چک‌لیست سریع a11y: حرکت و انیمیشن (Motion & Animation)"
+date: '2026-09-23'
+tags: ['a11y', 'Accessibility', 'Motion', 'Animation', 'WCAG', 'CSS', 'prefers-reduced-motion']
+description: "چرا انیمیشن‌های چشمک‌زن و parallax سنگین می‌تونه برای بخشی از کاربران خطرناک باشه و چطور با prefers-reduced-motion ازشون جلوگیری کنیم."
+enableComment: true
+---
+
+# 🎬 چک‌لیست سریع: حرکت و انیمیشن (Motion & Animation)
+
+**💡 مفهوم کلیدی**  
+انیمیشن‌ها وقتی خوب طراحی بشن، تجربه کاربری رو بهتر می‌کنن. اما برای کاربران مبتلا به **vestibular disorders** (اختلالات سیستم تعادلی)، میگرن، یا حساسیت به نور، انیمیشن‌های سنگین می‌تونه باعث **سرگیجه، تهوع، و حتی تشنج** بشه.
+
+**⚠️ دام رایج**  
+- انیمیشن‌های parallax سنگین هنگام اسکرول.
+- المان‌های چشمک‌زن (بیش از ۳ بار در ثانیه).
+- ویدیوهایی که با صدا به صورت خودکار پخش میشن.
+- ترنزیشن‌های چرخشی یا zoom روی کل صفحه.
+- نادیده گرفتن تنظیمات سیستم‌عامل کاربر.
+
+**📏 استاندارد WCAG**  
+- **SC 2.3.1 (Level A)**: محتوا نباید بیش از ۳ بار در ثانیه چشمک بزنه (یا باید هشدار داده بشه).
+- **SC 2.3.3 (Level AAA)**: انیمیشن‌هایی که از طریق تعامل شروع میشن باید قابلیت غیرفعال شدن داشته باشن.
+- **SC 2.2.2 (Level A)**: کاربر باید بتونه انیمیشن‌های خودکار (مثل اسلایدر) رو متوقف کنه.
+
+**🛠️ راه‌حل سریع در کد**
+
+### ۱. CSS: احترام به `prefers-reduced-motion`
+```css
+/* ❌ اشتباه: انیمیشن همیشگی بدون راه فرار */
+.hero-title {
+  animation: slideIn 1s ease-out;
+}
+
+/* ✅ درست: انیمیشن فقط برای کاربرانی که مشکلی ندارن */
+@media (prefers-reduced-motion: no-preference) {
+  .hero-title {
+    animation: slideIn 1s ease-out;
+  }
+}
+
+/* ✅ جایگزین ساده برای کاربران حساس */
+@media (prefers-reduced-motion: reduce) {
+  .hero-title {
+    animation: none;
+    opacity: 1; /* فقط fade ساده یا بدون تغییر */
+  }
+  
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+```
+
+### ۲. JavaScript: بررسی تنظیمات کاربر
+```jsx
+// ✅ هوک React برای تشخیص ترجیح کاربر
+function useReducedMotion() {
+  const [reduced, setReduced] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  });
+
+  useEffect(() => {
+    const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const handler = (e) => setReduced(e.matches);
+    mq.addEventListener('change', handler);
+    return () => mq.removeEventListener('change', handler);
+  }, []);
+
+  return reduced;
+}
+
+// استفاده در کامپوننت
+function Hero() {
+  const reducedMotion = useReducedMotion();
+  
+  return (
+    <motion.div
+      animate={reducedMotion ? {} : { y: [0, -20, 0] }}
+      transition={{ duration: 2, repeat: Infinity }}
+    >
+      <h1>خوش آمدید</h1>
+    </motion.div>
+  );
+}
+```
+
+### ۳. ویدیو و محتوای خودکار
+```html
+<!-- ❌ اشتباه: ویدیو با صدا و autoplay -->
+<video src="promo.mp4" autoplay></video>
+
+<!-- ✅ درست: بدون صدا، با کنترل و قابلیت توقف -->
+<video src="promo.mp4" autoplay muted loop controls>
+  <track kind="captions" src="captions.vtt" srclang="fa" label="فارسی" />
+</video>
+```
+
+**🔗 ابزار تست**  
+- **ویندوز**: Settings → Ease of Access → Display → Show animations (خاموش کن).
+- **مک**: System Preferences → Accessibility → Display → Reduce motion.
+- **iOS/Android**: در تنظیمات Accessibility گزینه‌ی Reduce Motion رو فعال کن.
+- **Chrome DevTools**: Rendering → Emulate CSS media feature `prefers-reduced-motion`.
+
+> **قانون ۳ ثانیه‌ای:** توی سیستم‌عاملت `Reduce Motion` رو فعال کن، بعد سایتت رو باز کن. اگر هنوز هم المانی می‌چرخه، می‌پره، یا چشمک می‌زنه، یعنی به ترجیح کاربر احترام نذاشتی!
