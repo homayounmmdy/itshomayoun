@@ -1,39 +1,39 @@
-import type {Metadata} from 'next'
-import {getTags} from "@/lib/get-tags";
-import {Posts} from "@/components/posts";
-import {Tags} from "@/components/tags";
+import { Posts } from "@/components/posts";
+import { Tags } from "@/components/tags";
+import { getTags } from "@/lib/get-tags";
+import type { Metadata } from "next";
 
 type TagPageParams = {
-    tag: string
-}
+  tag: string;
+};
 
 type TagPageProps = {
-    params: Promise<TagPageParams>
-}
+  params: Promise<TagPageParams>;
+};
 
 export async function generateMetadata(props: TagPageProps): Promise<Metadata> {
-    const params = await props.params
-    return {
-        title: `پست با تگ "${decodeURIComponent(params.tag)}"`
-    }
+  const params = await props.params;
+  return {
+    title: `پست با تگ "${decodeURIComponent(params.tag)}"`,
+  };
 }
 
 export async function generateStaticParams(): Promise<TagPageParams[]> {
-    const allTags = await getTags()
-    return [...new Set(allTags)].map(item => ({tag: item.name}))
+  const allTags = await getTags();
+  return [...new Set(allTags)].map((item) => ({ tag: item.name }));
 }
 
 export default async function TagPage(props: TagPageProps) {
-    const params = await props.params
-    const decodedTag = decodeURIComponent(params.tag)
+  const params = await props.params;
+  const decodedTag = decodeURIComponent(params.tag);
 
-    return (
-        <>
-            <h1>پست با تگ &quot;{decodedTag}&quot;</h1>
-            <Posts tags={[decodedTag]}/>
+  return (
+    <>
+      <h1>پست با تگ &quot;{decodedTag}&quot;</h1>
+      <Posts tags={[decodedTag]} />
 
-            <h2>تگ های بیشتر</h2>
-            <Tags/>
-        </>
-    )
+      <h2>تگ های بیشتر</h2>
+      <Tags />
+    </>
+  );
 }
