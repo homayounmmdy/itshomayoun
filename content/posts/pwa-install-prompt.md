@@ -1,0 +1,166 @@
+---
+title: "PWA: کنترل دکمه‌ی نصب (Install Prompt)"
+date: '2026-09-23'
+tags: ['PWA', 'Install-Prompt', 'beforeinstallprompt', 'Service-Worker', 'Frontend', 'React']
+description: "چطور دکمه‌ی «افزودن به صفحه اصلی» رو در زمان درست نشون بدیم، چرا نباید بلافاصله بعد از لود ظاهر بشه و چطور با beforeinstallprompt کنترلش کنیم."
+enableComment: true
+---
+
+# 📲 کنترل دکمه‌ی نصب (Install Prompt)
+
+**💡 مفهوم کلیدی**  
+مرورگر به صورت خودکار یه بنر نصب (Mini Info Bar) نشون میده، اما شما می‌تونید با رویداد `beforeinstallprompt` این رفتار رو بگیرید و دکمه‌ی نصب سفارشی خودتون رو **در زمان مناسب** نشون بدید. این یعنی نرخ نصب بالاتر و تجربه‌ی کاربری بهتر.
+
+**⚠️ دام رایج**  
+- نشون دادن دکمه‌ی نصب بلافاصله بعد از لود صفحه (کاربر هنوز ارزش سایت رو ندیده!).
+- نادیده گرفتن رویداد `beforeinstallprompt` و تکیه بر بنر پیش‌فرض مرورگر.
+- فراموش کردن `e.preventDefault()` → بنر پیش‌فرض مرورگر همزمان ظاهر میشه.
+- نشون دادن دکمه به کاربری که **قبلاً نصب کرده**.
+- عدم ذخیره‌ی event برای استفاده‌ی بعدی (event فقط یک‌بار fire میشه).
+
+**📏 شرایط نمایش Install Prompt توسط مرورگر**  
+مرورگر فقط وقتی `beforeinstallprompt` رو fire می‌کنه که:
+- ✅ سایت روی HTTPS باشه
+- ✅ manifest معتبر با آیکون‌های ۱۹۲ و ۵۱۲ داشته باشه
+- ✅ Service Worker ثبت شده باشه
+- ✅ کاربر حداقل چند دقیقه با سایت تعامل داشته باشه
+- ✅ کاربر قبلاً اپ رو نصب نکرده باشه
+- ✅ کاربر قبلاً prompt رو رد نکرده باشه (در بعضی مرورگرها)
+
+**🛠️ راه‌حل سریع در کد**
+
+### ۱. هوک React برای مدیریت نصب
+```jsx
+import { useState, useEffect } from 'react';
+
+function useInstallPrompt() {
+  const [deferredPrompt, setDeferredPrompt] = useState(null);
+  const [isInstallable, setIsInstallable] = useState(false);
+  const [isInstalled, setIsInstalled] = useState(false);
+
+  useEffect(() => {
+    // ✅ بررسی اینکه آیا قبلاً نصب شده
+    if (window.matchMedia('(display-mode: standalone)').matches) {
+      setIsInstalled(true);
+      return;
+    }
+
+    const handler = (e) => {
+      // ✅ جلوگیری از بنر پیش‌فرض مرورگر
+      e.preventDefault();
+      // ✅ ذخیره‌ی event برای استفاده‌ی بعدی
+      setDeferredPrompt(e);
+      setIsInstallable(true);
+    };
+
+    window.addEventListener('beforeinstallprompt', handler);
+
+    // ✅ وقتی کاربر نصب کرد
+    window.addEventListener('appinstalled', () => {
+      setIsInstalled(true);
+      setIsInstallable(false);
+      setDeferredPrompt(null);
+    });
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handler);
+    };
+  }, []);
+
+  const promptInstall = async () => {
+    if (!deferredPrompt) return;
+    
+    // ✅ نمایش prompt بومی مرورگر
+    deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    
+    console.log(`User choice: ${outcome}`); // "accepted" یا "dismissed"
+    
+    // ✅ پاک کردن event (فقط یک‌بار قابل استفاده‌ست)
+    setDeferredPrompt(null);
+    setIsInstallable(false);
+  };
+
+  return { isInstallable, isInstalled, promptInstall };
+}
+```
+
+### ۲. کامپوننت دکمه‌ی نصب
+```jsx
+function InstallButton() {
+  const { isInstallable, isInstalled, promptInstall } = useInstallPrompt();
+
+  // ❌ نصب شده یا قابل نصب نیست → چیزی نشون نده
+  if (isInstalled || !isInstallable) return null;
+
+  return (
+    <button
+      onClick={promptInstall}
+      className="fixed bottom-4 left-4 bg-blue-600 text-white 
+                 px-6 py-3 rounded-full shadow-lg 
+                 hover:bg-blue-700 transition-colors
+                 flex items-center gap-2"
+      aria-label="نصب اپلیکیشن"
+    >
+      <DownloadIcon aria-hidden="true" />
+      نصب اپلیکیشن
+    </button>
+  );
+}
+```
+
+### ۳. زمان‌بندی هوشمند نمایش
+```jsx
+// ✅ نشون دادن بعد از تعامل کاربر (نه بلافاصله!)
+function SmartInstallBanner() {
+  const { isInstallable, isInstalled, promptInstall } = useInstallPrompt();
+  const [showBanner, setShowBanner] = useState(false);
+  const [interactionCount, setInteractionCount] = useState(0);
+
+  useEffect(() => {
+    const trackInteraction = () => {
+      setInteractionCount((prev) => {
+        const next = prev + 1;
+        // ✅ بعد از ۳ تعامل (کلیک، اسکرول، etc.) بنر رو نشون بده
+        if (next >= 3 && isInstallable) {
+          setShowBanner(true);
+        }
+        return next;
+      });
+    };
+
+    window.addEventListener('click', trackInteraction, { once: false });
+    window.addEventListener('scroll', trackInteraction, { once: true });
+    
+    return () => window.removeEventListener('click', trackInteraction);
+  }, [isInstallable]);
+
+  if (!showBanner || isInstalled) return null;
+
+  return (
+    <div className="install-banner" role="dialog" aria-label="پیشنهاد نصب">
+      <p>برای دسترسی سریع‌تر، اپ رو نصب کن!</p>
+      <button onClick={promptInstall}>نصب</button>
+      <button onClick={() => setShowBanner(false)} aria-label="بستن">✕</button>
+    </div>
+  );
+}
+```
+
+### ۴. تشخیص نصب بودن (CSS)
+```css
+/* ✅ مخفی کردن دکمه‌ی نصب وقتی اپ در حالت standalone اجرا میشه */
+@media (display-mode: standalone) {
+  .install-button {
+    display: none !important;
+  }
+}
+```
+
+**🔗 ابزار تست**  
+- **Chrome DevTools** → Application → Manifest → دکمه‌ی "Install app" (حتی روی دسکتاپ).
+- **DevTools** → Application → Service Workers → "Bypass for network" رو غیرفعال کن.
+- **Lighthouse** → بخش PWA → "Is configured for a custom install prompt".
+- تست واقعی: سایت رو روی موبایل اندروید باز کن و ببین prompt ظاهر میشه یا نه.
+
+> **قانون ۳ ثانیه‌ای:** سایتت رو باز کن. آیا دکمه‌ی نصب بلافاصله پرید تو صورتت؟ اگه بله، داری کاربر رو فراری میدی! بذار اول ارزش سایتت رو ببینه، بعد (مثلاً بعد از ۳ کلیک یا اسکرول) دکمه‌ی نصب رو نشون بده.
