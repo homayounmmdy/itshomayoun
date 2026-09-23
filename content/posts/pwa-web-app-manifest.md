@@ -1,0 +1,155 @@
+---
+title: "Web App Manifest درست و کامل"
+date: '2026-09-23'
+tags: ['PWA', 'Web-App-Manifest', 'Manifest', 'Installability', 'Frontend', 'Icons']
+description: "چرا manifest اشتباه باعث میشه PWA نصب نشه، آیکون‌ها تار دیده بشن و کاربر تجربه‌ی اپ‌مانند نگیره."
+enableComment: true
+---
+
+# 📄 Web App Manifest درست و کامل
+
+**💡 مفهوم کلیدی**  
+`manifest.json` شناسنامه‌ی PWA شماست. به مرورگر می‌گه: اسم اپ چیه، آیکونش کدومه، وقتی نصب شد چه شکلی باید باشه، از کجا شروع بشه و رنگ تمش چیه. بدون یه manifest درست، **دکمه‌ی Install اصلاً ظاهر نمیشه**.
+
+**⚠️ دام رایج**  
+- آیکون‌های با سایز اشتباه (مثلاً ۱۲۸×۱۲۸ به جای ۱۹۲ و ۵۱۲).
+- فراموش کردن `purpose: "maskable"` → آیکون در اندروید گرد/مربع بریده میشه.
+- `start_url` با چیزی که واقعاً cache شده یکی نیست.
+- `scope` اشتباه → لینک‌های خارج از scope از حالت standalone خارج میشن.
+- فراموش کردن `screenshots` → در بعضی Storeها (مثل Microsoft) اپ نمایش داده نمیشه.
+- نادیده گرفتن Safari در iOS (manifest رو کامل نمی‌خونه، نیاز به meta tags جدا داره).
+
+**📏 فیلدهای ضروری برای نصب‌پذیری**  
+- ✅ `name` (اسم کامل) و `short_name` (اسم زیر آیکون)
+- ✅ `start_url` (صفحه‌ی شروع)
+- ✅ `display` (`standalone` برای تجربه‌ی اپ‌مانند)
+- ✅ آیکون‌های **192×192** و **512×512** با `type: "image/png"`
+- ✅ `theme_color` و `background_color`
+
+**🛠️ Manifest کامل و استاندارد**
+
+```json
+// public/manifest.json
+{
+  "name": "فروشگاه آنلاین دیجی‌مارکت",
+  "short_name": "دیجی‌مارکت",
+  "description": "خرید آنلاین با ارسال سریع",
+  "start_url": "/?utm_source=pwa&utm_display=standalone",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "dir": "rtl",
+  "lang": "fa-IR",
+  "theme_color": "#2563eb",
+  "background_color": "#ffffff",
+  "categories": ["shopping", "lifestyle"],
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-maskable-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/icons/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "سبد خرید",
+      "short_name": "سبد",
+      "description": "مشاهده سبد خرید",
+      "url": "/cart?utm_source=pwa_shortcut",
+      "icons": [{ "src": "/icons/cart-96.png", "sizes": "96x96" }]
+    },
+    {
+      "name": "جستجو",
+      "url": "/search?utm_source=pwa_shortcut",
+      "icons": [{ "src": "/icons/search-96.png", "sizes": "96x96" }]
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "/screenshots/home-wide.png",
+      "sizes": "1280x720",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "صفحه اصلی در دسکتاپ"
+    },
+    {
+      "src": "/screenshots/home-narrow.png",
+      "sizes": "720x1280",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "صفحه اصلی در موبایل"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "سبد خرید",
+      "url": "/cart"
+    }
+  ],
+  "prefer_related_applications": false
+}
+```
+
+**🔗 اتصال manifest به HTML**
+
+```html
+<!-- در <head> -->
+<link rel="manifest" href="/manifest.json" />
+
+<!-- ✅ رنگ تم (برای همه مرورگرها) -->
+<meta name="theme-color" content="#2563eb" media="(prefers-color-scheme: light)" />
+<meta name="theme-color" content="#1e40af" media="(prefers-color-scheme: dark)" />
+
+<!-- ✅ پشتیبانی از Safari در iOS (manifest رو نمی‌خونه!) -->
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-title" content="دیجی‌مارکت" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<link rel="apple-touch-icon" href="/icons/icon-192.png" />
+<link rel="apple-touch-icon" sizes="180x180" href="/icons/icon-180.png" />
+
+<!-- ✅ favicon برای تب مرورگر -->
+<link rel="icon" href="/favicon.ico" sizes="32x32" />
+<link rel="icon" href="/icons/icon.svg" type="image/svg+xml" />
+```
+
+**🎨 نکات مهم درباره آیکون‌ها**
+
+```markdown
+| نیاز            | سایز        | purpose     | کاربرد                          |
+|-----------------|-------------|-------------|----------------------------------|
+| آیکون اصلی      | 192×192     | any         | نمایش در لیست اپ‌ها              |
+| آیکون بزرگ      | 512×512     | any         | Play Store و اسکرین نصب         |
+| آیکون maskable  | 192×192     | maskable    | اندروید (گرد/مربع بریده میشه)   |
+| آیکون maskable  | 512×512     | maskable    | اندروید در سایز بزرگ            |
+```
+
+**⚠️ قانون طلایی maskable:**  
+لوگوی اصلی باید در **مرکز ۸۰٪** تصویر باشه (safe zone)، چون لبه‌ها توسط سیستم‌عامل بریده میشن. پس‌زمینه رو تا لبه‌ها ادامه بده.
+
+**🔗 ابزار تست و اعتبارسنجی**  
+- **Chrome DevTools** → Application → Manifest (پیش‌نمایش زنده).
+- **Lighthouse** → بخش PWA → "Defines icons with purpose".
+- **Web App Manifest Validator**: [manifest-validator.com](https://manifest-validator.com)
+- **Maskable Icon Editor**: [maskable.app](https://maskable.app) → تست آیکون maskable روی شکل‌های مختلف.
+- **Real Device Test**: روی اندروید و iOS واقعی نصب کن!
+
+> **قانون ۳ ثانیه‌ای:** DevTools → Application → Manifest رو باز کن. آیا همه‌ی فیلدهای سبز پر شدن؟ آیا آیکون maskable داری؟ بعد `Add to Home Screen` رو روی موبایل واقعی بزن. اگر آیکون تار بود، بریده بود، یا اسمش اشتباه بود، یعنی manifestت مشکل داره!
