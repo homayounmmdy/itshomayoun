@@ -11,14 +11,16 @@ function Playlists() {
       {playlists.map((playlist) => {
         const playlistSlug = slugify(playlist.name);
 
-        const data = {
+        const playListData = {
           slug: playlistSlug,
           title: playlist.name,
+          href: `/playlists/${playlistSlug}`,
         };
+
         return (
           <section key={playlist.name}>
             <ul>
-              <PlayListItem post={data} key={playlist.name} />
+              <PlayListItem post={playListData} key={playlist.name} />
             </ul>
           </section>
         );

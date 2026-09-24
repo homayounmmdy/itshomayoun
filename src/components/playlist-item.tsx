@@ -6,11 +6,12 @@ function playlistItem({
   post: {
     slug: string;
     title: string;
+    href?: string;
   };
 }) {
   return (
     <li key={post.slug}>
-      <Link href={post.slug}>{post.title}</Link>
+      <Link href={post.href ? post.href : post.slug}>{post.title}</Link>
     </li>
   );
 }
