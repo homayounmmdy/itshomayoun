@@ -1,0 +1,196 @@
+---
+title: "PWA: تشخیص نصب شدن اپ (App Installed Detection)"
+date: '2026-09-24'
+playlist: 'PWA - برنامه وب پیشرونده'
+tags: ['PWA', 'App-Installed', 'Standalone', 'display-mode', 'iOS', 'React']
+description: "چطور بفهمیم کاربر PWA رو نصب کرده، چرا این تشخیص برای UX حیاتیه و چطور بین iOS و اندروید و دسکتاپ تفاوت قائل بشیم."
+enableComment: true
+---
+
+# 🕵️ تشخیص نصب شدن اپ (App Installed Detection)
+
+**💡 مفهوم کلیدی**  
+وقتی کاربر PWA رو نصب می‌کنه، سایت شما دیگه یه "وب‌سایت" نیست، یه **"اپلیکیشن"** هست. این یعنی باید UX متفاوتی ارائه بدی: دکمه‌ی نصب رو مخفی کنی، منوی مخصوص اپ نشون بدی، و از قابلیت‌های بومی‌تر استفاده کنی.
+
+**⚠️ دام رایج**  
+- فقط یک‌بار در `useEffect` اول چک کردن (تغییر حالت رو نمی‌گیره!).
+- نادیده گرفتن iOS Safari که `display-mode` رو به شکل متفاوتی گزارش می‌کنه.
+- عدم استفاده از URL parameter برای ردیابی در Analytics.
+- فراموش کردن حالت `window-controls-overlay` در ویندوز.
+- نشون دادن دکمه‌ی نصب به کاربری که **قبلاً نصب کرده**.
+
+**📏 روش‌های تشخیص نصب**
+
+| روش                      | اندروید | iOS   | دسکتاپ | قابل اعتماد؟ |
+|--------------------------|---------|-------|--------|---------------|
+| `display-mode: standalone` | ✅      | ❌    | ✅     | بله (بیشتر) |
+| `navigator.standalone`   | ❌      | ✅    | ❌     | فقط iOS     |
+| URL parameter            | ✅      | ✅    | ✅     | بله         |
+| `appinstalled` event     | ✅      | ✅    | ✅     | بله (لحظه‌ای) |
+
+**🛠️ راه‌حل سریع در کد**
+
+### ۱. هوک کامل تشخیص نصب
+```jsx
+import { useState, useEffect } from 'react';
+
+function useIsAppInstalled() {
+  const [isInstalled, setIsInstalled] = useState(false);
+  const [platform, setPlatform] = useState('browser'); // browser | android | ios | desktop
+
+  useEffect(() => {
+    const checkInstallation = () => {
+      // ✅ روش ۱: display-mode (اندروید و دسکتاپ)
+      const isStandalone = window.matchMedia('(display-mode: standalone)').matches;
+      
+      // ✅ روش ۲: window-controls-overlay (ویندوز)
+      const isWindowControlsOverlay = window.matchMedia('(display-mode: window-controls-overlay)').matches;
+      
+      // ✅ روش ۳: navigator.standalone (iOS Safari)
+      const isIOSStandalone = window.navigator.standalone === true;
+      
+      // ✅ روش ۴: URL parameter (قابل اعتمادترین برای Analytics)
+      const urlParams = new URLSearchParams(window.location.search);
+      const isFromPWA = urlParams.get('utm_source') === 'pwa' || 
+                        urlParams.get('utm_display') === 'standalone';
+
+      const installed = isStandalone || isWindowControlsOverlay || isIOSStandalone || isFromPWA;
+      setIsInstalled(installed);
+
+      // ✅ تشخیص پلتفرم
+      if (isIOSStandalone || /iPad|iPhone|iPod/.test(navigator.userAgent)) {
+        setPlatform('ios');
+      } else if (isStandalone && /Android/.test(navigator.userAgent)) {
+        setPlatform('android');
+      } else if (isStandalone || isWindowControlsOverlay) {
+        setPlatform('desktop');
+      } else {
+        setPlatform('browser');
+      }
+    };
+
+    checkInstallation();
+
+    // ✅ گوش دادن به تغییر حالت (مثلاً بعد از نصب)
+    const mqStandalone = window.matchMedia('(display-mode: standalone)');
+    mqStandalone.addEventListener('change', checkInstallation);
+
+    // ✅ گوش دادن به event نصب
+    const handleInstalled = () => setIsInstalled(true);
+    window.addEventListener('appinstalled', handleInstalled);
+
+    return () => {
+      mqStandalone.removeEventListener('change', checkInstallation);
+      window.removeEventListener('appinstalled', handleInstalled);
+    };
+  }, []);
+
+  return { isInstalled, platform };
+}
+```
+
+### ۲. استفاده در کامپوننت
+```jsx
+function AppHeader() {
+  const { isInstalled, platform } = useIsAppInstalled();
+
+  return (
+    <header>
+      {/* ✅ فقط در مرورگر نشون بده، نه در اپ نصب‌شده */}
+      {!isInstalled && <PromoBanner>اپ ما رو نصب کن!</PromoBanner>}
+      
+      {/* ✅ منوی متفاوت برای اپ نصب‌شده */}
+      {isInstalled ? (
+        <AppNavigation />
+      ) : (
+        <WebNavigation />
+      )}
+      
+      {/* ✅ نمایش پلتفرم برای دیباگ */}
+      {process.env.NODE_ENV === 'development' && (
+        <span>Platform: {platform}</span>
+      )}
+    </header>
+  );
+}
+```
+
+### ۳. CSS برای حالت‌های مختلف
+```css
+/* ✅ مخفی کردن عناصر وب در حالت standalone */
+@media (display-mode: standalone) {
+  .web-only-header {
+    display: none;
+  }
+  
+  .app-only-footer {
+    display: block;
+  }
+}
+
+/* ✅ استایل مخصوص iOS */
+@supports (-webkit-touch-callout: none) {
+  .ios-specific {
+    /* استایل مخصوص iOS */
+  }
+}
+
+/* ✅ استایل مخصوص ویندوز با title bar سفارشی */
+@media (display-mode: window-controls-overlay) {
+  .title-bar {
+    padding-top: env(titlebar-area-height, 0);
+  }
+}
+```
+
+### ۴. ردیابی در Analytics
+```jsx
+// ✅ در manifest.json
+{
+  "start_url": "/?utm_source=pwa&utm_medium=standalone&utm_campaign=app_launch"
+}
+
+// ✅ در Google Analytics یا Plausible
+useEffect(() => {
+  const { isInstalled, platform } = useIsAppInstalled();
+  
+  if (isInstalled) {
+    // ✅ ارسال event به Analytics
+    gtag('event', 'app_launched', {
+      platform: platform, // android | ios | desktop
+      app_version: '1.0.0'
+    });
+  }
+}, []);
+```
+
+### ۵. کامپوننت شرطی
+```jsx
+// ✅ کامپوننت wrapper برای نمایش شرطی
+function ShowOnlyInBrowser({ children }) {
+  const { isInstalled } = useIsAppInstalled();
+  return isInstalled ? null : <>{children}</>;
+}
+
+function ShowOnlyInApp({ children }) {
+  const { isInstalled } = useIsAppInstalled();
+  return isInstalled ? <>{children}</> : null;
+}
+
+// استفاده:
+<ShowOnlyInBrowser>
+  <CookieBanner />
+</ShowOnlyInBrowser>
+
+<ShowOnlyInApp>
+  <OfflineIndicator />
+</ShowOnlyInApp>
+```
+
+**🔗 ابزار تست**  
+- **اندروید**: سایت رو نصب کن، از صفحه اصلی باز کن، DevTools → Console → `window.matchMedia('(display-mode: standalone)').matches` باید `true` باشه.
+- **iOS**: Safari → Share → Add to Home Screen → باز کردن از هوم اسکرین → `window.navigator.standalone` باید `true` باشه.
+- **دسکتاپ**: Chrome → Install → باز کردن → `display-mode: standalone` باید فعال باشه.
+- **Chrome DevTools** → Rendering → Emulate CSS media feature `display-mode: standalone`.
+
+> **قانون ۳ ثانیه‌ای:** سایت رو نصب کن و از هوم اسکرین باز کن. توی Console بنویس `window.matchMedia('(display-mode: standalone)').matches`. اگه `false` بود، یعنی تشخیص نصب درست کار نمی‌کنه! بعد URL رو چک کن؛ اگه `utm_source=pwa` نداشت، یعنی `start_url` در manifest اشتباهه.
