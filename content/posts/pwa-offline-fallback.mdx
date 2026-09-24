@@ -1,0 +1,378 @@
+---
+title: "PWA: صفحه‌ی آفلاین (Offline Fallback)"
+date: '2026-09-24'
+playlist: 'PWA - برنامه وب پیشرونده'
+tags: ['PWA', 'Offline', 'Service-Worker', 'Cache-Strategy', 'Fallback', 'Frontend', 'React']
+description: "چرا صفحه‌ی آفلاین برای PWA حیاتیه، چطور با Service Worker یه fallback زیبا بسازیم و چطور تجربه‌ی کاربری رو در حالت قطع شبکه حفظ کنیم."
+enableComment: true
+---
+
+# 📴 PWA: صفحه‌ی آفلاین (Offline Fallback)
+
+**💡 مفهوم کلیدی**  
+وقتی شبکه قطع میشه، کاربر نباید با یه صفحه‌ی خطای زشت مرورگر (مثل "No internet connection" کروم) مواجه بشه. یه **صفحه‌ی آفلاین سفارشی** که برند شما رو حفظ کنه، به کاربر بگه چی شده و راه‌حل بده، تفاوت یه PWA حرفه‌ای با یه سایت معمولی رو نشون میده.
+
+**⚠️ دام رایج**  
+- نداشتن هیچ fallbackی → کاربر صفحه‌ی خطای زشت مرورگر رو می‌بینه.
+- cache نکردن صفحه‌ی آفلاین → وقتی شبکه قطعه، صفحه‌ی آفلاین هم لود نمیشه!
+- صفحه‌ی آفلاین بدون راه‌حل (فقط می‌گه "قطع هست" ولی دکمه‌ی تلاش مجدد نداره).
+- عدم تشخیص آنلاین/آفلاین به صورت real-time.
+- فراموش کردن cache کردن assets ضروری صفحه‌ی آفلاین (CSS، فونت، آیکون).
+
+**📏 استاندارد WCAG و UX**  
+- کاربر باید بفهمه **چرا** صفحه لود نمیشه (نه فقط "خطا").
+- باید **راه‌حل** ارائه بشه (دکمه‌ی تلاش مجدد، بررسی تنظیمات شبکه).
+- صفحه‌ی آفلاین باید **سبک** باشه (حداقل dependency).
+- باید **accessible** باشه (با کیبورد قابل استفاده، کنتراست مناسب).
+
+**🛠️ راه‌حل سریع در کد**
+
+### ۱. ساخت صفحه‌ی آفلاین (React)
+
+```jsx
+// app/offline/page.jsx
+import { useEffect, useState } from 'react';
+
+export default function OfflinePage() {
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
+  // ✅ اگر آنلاین شد، خودکار رفرش کن
+  useEffect(() => {
+    if (isOnline) {
+      window.location.reload();
+    }
+  }, [isOnline]);
+
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
+      <div className="max-w-md text-center">
+        {/* ✅ آیکون تزئینی */}
+        <div className="mb-6">
+          <svg 
+            className="w-24 h-24 mx-auto text-gray-400" 
+            fill="none" 
+            viewBox="0 0 24 24" 
+            stroke="currentColor"
+            aria-hidden="true"
+          >
+            <path 
+              strokeLinecap="round" 
+              strokeLinejoin="round" 
+              strokeWidth={2} 
+              d="M18.364 5.636a9 9 0 010 12.728M5.636 5.636a9 9 0 000 12.728M12 12h.01" 
+            />
+          </svg>
+        </div>
+
+        {/* ✅ عنوان واضح */}
+        <h1 className="text-2xl font-bold text-gray-900 mb-2">
+          اتصال اینترنت قطع است
+        </h1>
+
+        {/* ✅ توضیح مشکل */}
+        <p className="text-gray-600 mb-6">
+          متأسفانه در حال حاضر به اینترنت دسترسی ندارید. لطفاً اتصال شبکه‌ی خود را بررسی کنید.
+        </p>
+
+        {/* ✅ راه‌حل‌ها */}
+        <div className="space-y-3">
+          <button
+            onClick={() => window.location.reload()}
+            className="w-full bg-blue-600 text-white px-6 py-3 rounded-lg 
+                       hover:bg-blue-700 transition-colors font-medium
+                       focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+          >
+            تلاش مجدد
+          </button>
+
+          <a
+            href="/"
+            className="block w-full bg-gray-200 text-gray-800 px-6 py-3 rounded-lg 
+                       hover:bg-gray-300 transition-colors font-medium
+                       focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-offset-2"
+          >
+            بازگشت به صفحه اصلی
+          </a>
+        </div>
+
+        {/* ✅ اطلاعات بیشتر (اختیاری) */}
+        <div className="mt-8 text-sm text-gray-500">
+          <p className="mb-2">اگر مشکل ادامه داشت:</p>
+          <ul className="list-disc list-inside text-right space-y-1">
+            <li>اتصال Wi-Fi یا داده موبایل را بررسی کنید</li>
+            <li>مودم خود را ریستارت کنید</li>
+            <li>با پشتیبانی تماس بگیرید: ۰۲۱-۱۲۳۴۵۶۷۸</li>
+          </ul>
+        </div>
+
+        {/* ✅ وضعیت اتصال (برای دیباگ) */}
+        {process.env.NODE_ENV === 'development' && (
+          <div className="mt-6 p-3 bg-yellow-100 rounded text-sm">
+            <p>وضعیت: <strong>{isOnline ? 'آنلاین' : 'آفلاین'}</strong></p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+```
+
+### ۲. Service Worker: Cache کردن صفحه‌ی آفلاین
+
+```js
+// public/sw.js
+const CACHE_NAME = 'app-v1';
+const OFFLINE_URL = '/offline.html'; // یا '/offline' در Next.js
+
+// ✅ لیست assets ضروری برای صفحه‌ی آفلاین
+const OFFLINE_ASSETS = [
+  OFFLINE_URL,
+  '/styles/offline.css',
+  '/fonts/vazir.woff2',
+  '/icons/wifi-off.svg'
+];
+
+// ✅ نصب: cache کردن صفحه‌ی آفلاین
+self.addEventListener('install', (event) => {
+  event.waitUntil(
+    caches.open(CACHE_NAME).then((cache) => {
+      return cache.addAll(OFFLINE_ASSETS);
+    })
+  );
+});
+
+// ✅ فعال‌سازی: پاک کردن cache قدیمی
+self.addEventListener('activate', (event) => {
+  event.waitUntil(
+    caches.keys().then((keys) => {
+      return Promise.all(
+        keys
+          .filter((key) => key !== CACHE_NAME)
+          .map((key) => caches.delete(key))
+      );
+    })
+  );
+});
+
+// ✅ استراتژی Network First با fallback به آفلاین
+self.addEventListener('fetch', (event) => {
+  // ✅ فقط برای درخواست‌های navigation (صفحات)
+  if (event.request.mode === 'navigate') {
+    event.respondWith(
+      fetch(event.request)
+        .then((response) => {
+          // ✅ اگر موفق بود، cache رو آپدیت کن
+          const clone = response.clone();
+          caches.open(CACHE_NAME).then((cache) => {
+            cache.put(event.request, clone);
+          });
+          return response;
+        })
+        .catch(() => {
+          // ✅ اگر شبکه قطع بود، از cache بخون
+          return caches.match(event.request).then((cached) => {
+            return cached || caches.match(OFFLINE_URL);
+          });
+        })
+    );
+    return;
+  }
+
+  // ✅ برای assets دیگه: Cache First
+  event.respondWith(
+    caches.match(event.request).then((cached) => {
+      return cached || fetch(event.request);
+    })
+  );
+});
+```
+
+### ۳. نسخه‌ی ساده HTML (برای Next.js App Router)
+
+```html
+<!-- public/offline.html -->
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>آفلاین - نام سایت</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Vazir', sans-serif;
+      background: #f9fafb;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1rem;
+    }
+    .container {
+      max-width: 28rem;
+      text-align: center;
+    }
+    h1 {
+      font-size: 1.5rem;
+      color: #111827;
+      margin-bottom: 0.5rem;
+    }
+    p {
+      color: #6b7280;
+      margin-bottom: 1.5rem;
+    }
+    button {
+      background: #2563eb;
+      color: white;
+      border: none;
+      padding: 0.75rem 1.5rem;
+      border-radius: 0.5rem;
+      font-size: 1rem;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    button:hover { background: #1d4ed8; }
+    button:focus {
+      outline: 2px solid #2563eb;
+      outline-offset: 2px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>اتصال اینترنت قطع است</h1>
+    <p>لطفاً اتصال شبکه‌ی خود را بررسی کنید و دوباره تلاش کنید.</p>
+    <button onclick="window.location.reload()">تلاش مجدد</button>
+  </div>
+
+  <script>
+    // ✅ تشخیص آنلاین شدن و رفرش خودکار
+    window.addEventListener('online', () => {
+      window.location.reload();
+    });
+  </script>
+</body>
+</html>
+```
+
+### ۴. هوک React برای تشخیص آنلاین/آفلاین
+
+```jsx
+// hooks/useOnlineStatus.js
+import { useState, useEffect } from 'react';
+
+export function useOnlineStatus() {
+  const [isOnline, setIsOnline] = useState(
+    typeof navigator !== 'undefined' ? navigator.onLine : true
+  );
+
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
+  return isOnline;
+}
+```
+
+### ۵. استفاده در Layout اصلی
+
+```jsx
+// app/layout.jsx
+import { useOnlineStatus } from '@/hooks/useOnlineStatus';
+
+function OfflineBanner() {
+  const isOnline = useOnlineStatus();
+
+  if (isOnline) return null;
+
+  return (
+    <div 
+      role="alert" 
+      aria-live="assertive"
+      className="fixed top-0 left-0 right-0 bg-red-600 text-white 
+                 text-center py-2 px-4 z-50 text-sm"
+    >
+      ⚠️ اتصال اینترنت قطع است. برخی قابلیت‌ها در دسترس نیستند.
+    </div>
+  );
+}
+
+export default function RootLayout({ children }) {
+  return (
+    <html lang="fa" dir="rtl">
+      <body>
+        <OfflineBanner />
+        {children}
+      </body>
+    </html>
+  );
+}
+```
+
+### ۶. ثبت Service Worker
+
+```jsx
+// app/providers.jsx
+'use client';
+
+import { useEffect } from 'react';
+
+export function ServiceWorkerProvider({ children }) {
+  useEffect(() => {
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker
+        .register('/sw.js')
+        .then((reg) => {
+          console.log('SW registered:', reg.scope);
+        })
+        .catch((err) => {
+          console.error('SW registration failed:', err);
+        });
+    }
+  }, []);
+
+  return <>{children}</>;
+}
+```
+
+**🔗 ابزار تست**
+
+- **Chrome DevTools** → Application → Service Workers → "Bypass for network" رو غیرفعال کن.
+- **DevTools** → Network → "Offline" checkbox رو فعال کن و صفحه رو رفرش کن.
+- **Lighthouse** → PWA → "Is configured for a custom offline page".
+- **Workbox** → `workbox-precaching` برای مدیریت خودکار cache.
+- تست واقعی: اینترنت رو قطع کن و ببین صفحه‌ی آفلاین لود میشه یا نه.
+
+**⚠️ چک‌لیست نهایی**
+
+- [ ] صفحه‌ی آفلاین با برند شما طراحی شده؟
+- [ ] صفحه‌ی آفلاین در Service Worker cache شده؟
+- [ ] دکمه‌ی "تلاش مجدد" وجود داره؟
+- [ ] وقتی شبکه برمی‌گرده، خودکار رفرش میشه؟
+- [ ] با کیبورد قابل استفاده‌ست؟ (Tab به دکمه‌ها می‌ره)
+- [ ] کنتراست متن/پس‌زمینه مناسبه؟ (حداقل 4.5:1)
+- [ ] در حالت آفلاین واقعی تست شده؟
+
+> **قانون ۳ ثانیه‌ای:** DevTools → Network → Offline رو فعال کن و صفحه رو رفرش کن. آیا صفحه‌ی آفلاین زیبا و برند شما ظاهر میشه؟ یا صفحه‌ی زشت مرورگر؟ اگه دومی بود، یعنی fallback نداری!
