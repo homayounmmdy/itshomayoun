@@ -3,6 +3,7 @@ import {useMDXComponents as getNextraComponents} from 'nextra/mdx-components'
 import {Posts} from "@/components/posts";
 import {Tags} from "@/components/tags";
 import Playlists from '@/components/playlists';
+import AboutMe from '@/components/about-me';
 
 const blogComponents = getBlogMDXComponents({
     h1: ({children}) => (
@@ -35,6 +36,7 @@ export function useMDXComponents() {
     return {
         ...blogComponents,
         ...defaultComponents,
+        AboutMe : AboutMe,
         Posts: Posts,
         Playlists: Playlists,
         Tags: Tags,

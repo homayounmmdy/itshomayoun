@@ -59,3 +59,27 @@ export async function getPosts(options: GetPostsOptions = {}): Promise<PostItem[
 
     return posts as unknown as PostItem[];
 }
+
+/**
+ * Returns only the total number of posts.
+ * Accepts the same filters as `getPosts` (tags, excludeByTitle) but ignores `first`.
+ */
+export async function getPostsCount(
+    options: Omit<GetPostsOptions, 'first'> = {}
+): Promise<number> {
+    const { tags, excludeByTitle } = options;
+
+    const { directories } = normalizePages({
+        list: await getPageMap('/posts'),
+        route: '/posts'
+    })
+
+    return directories.filter((post) => {
+        if (post.name === 'index') return false;
+        if (excludeByTitle && post.title === excludeByTitle) return false;
+        if (tags && tags.length > 0) {
+            return tags.some(tag => post.frontMatter?.tags?.includes(tag));
+        }
+        return true;
+    }).length;
+}
