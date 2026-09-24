@@ -2,6 +2,7 @@ import {useMDXComponents as getBlogMDXComponents} from 'nextra-theme-blog'
 import {useMDXComponents as getNextraComponents} from 'nextra/mdx-components'
 import {Posts} from "@/components/posts";
 import {Tags} from "@/components/tags";
+import Playlists from '@/components/playlists';
 
 const blogComponents = getBlogMDXComponents({
     h1: ({children}) => (
@@ -35,6 +36,7 @@ export function useMDXComponents() {
         ...blogComponents,
         ...defaultComponents,
         Posts: Posts,
+        Playlists: Playlists,
         Tags: Tags,
     }
 }

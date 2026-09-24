@@ -1,6 +1,5 @@
 import CustomFooter from "@/components/custom-footer";
 import CustomHeader from "@/components/custom-header";
-import Playlists from "@/components/playlists";
 import "@/styles/globals.css";
 import { Metadata } from "next";
 import localFont from "next/font/local";
@@ -35,10 +34,7 @@ export default async function RootLayout({ children }) {
       <body className="min-h-screen">
         <Layout>
           <CustomHeader />
-
           {children}
-<Playlists />
-
           <CustomFooter />
         </Layout>
       </body>
