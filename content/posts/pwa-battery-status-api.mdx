@@ -1,0 +1,261 @@
+---
+title: "PWA: Battery Status API و بهینه‌سازی مصرف انرژی"
+date: '2026-09-24'
+playlist: 'PWA - برنامه وب پیشرونده'
+tags: ['PWA', 'Battery-API', 'Performance', 'Energy-Efficiency', 'Device-API', 'React']
+description: "چطور با Battery Status API مصرف انرژی PWA رو بهینه کنیم، انیمیشن‌ها رو در حالت باتری کم کاهش بدیم و از کاربران در برابر خاموش شدن دستگاه محافظت کنیم."
+enableComment: true
+---
+
+# 🔋 PWA: Battery Status API و بهینه‌سازی مصرف انرژی
+
+**💡 مفهوم کلیدی**  
+Battery Status API به سایت اجازه میده **وضعیت باتری دستگاه** (درصد شارژ، زمان باقی‌مانده، وضعیت شارژ شدن) رو بخونه. با این اطلاعات می‌تونی UX رو هوشمند کنی: در باتری کم انیمیشن‌ها رو کم کنی، sync رو به تعویق بندازی، یا به کاربر هشدار بدی.
+
+**⚠️ دام رایج**  
+- استفاده بدون fallback برای مرورگرهای بدون پشتیبانی.
+- درخواست‌های مکرر به API (هر ثانیه polling کردن).
+- نادیده گرفتن حریم خصوصی کاربر (این API به دلایل privacy در خیلی مرورگرها محدود شده).
+- استفاده برای اهداف تبلیغاتی یا fingerprinting (غیراخلاقی و ممنوع).
+- عدم استفاده از event listener و تکیه بر polling.
+
+**📏 وضعیت پشتیبانی مرورگرها (مهم!)**
+
+| مرورگر       | پشتیبانی | وضعیت                                  |
+|--------------|-----------|-----------------------------------------|
+| Chrome       | ✅        | کامل                                   |
+| Edge         | ✅        | کامل                                   |
+| Opera        | ✅        | کامل                                   |
+| Safari       | ❌        | **غیرفعال** (به دلایل حریم خصوصی)      |
+| Firefox      | ❌        | **غیرفعال** (به دلایل حریم خصوصی)      |
+| iOS Safari   | ❌        | پشتیبانی نمیشه                         |
+
+> ⚠️ **نکته حیاتی**: این API فقط در مرورگرهای Chromium-based کار می‌کنه. همیشه fallback بذار!
+
+**🛠️ راه‌حل سریع در کد**
+
+### ۱. هوک React برای مدیریت باتری
+
+```jsx
+// hooks/useBatteryStatus.js
+import { useState, useEffect } from 'react';
+
+export function useBatteryStatus() {
+  const [battery, setBattery] = useState({
+    isSupported: false,
+    level: 100,        // 0 تا 100
+    charging: false,
+    chargingTime: Infinity,
+    dischargingTime: Infinity,
+    isLow: false,
+    isCritical: false,
+  });
+
+  useEffect(() => {
+    let batteryManager = null;
+
+    const init = async () => {
+      // ✅ بررسی پشتیبانی
+      if (!('getBattery' in navigator)) {
+        console.warn('Battery API not supported');
+        return;
+      }
+
+      try {
+        batteryManager = await navigator.getBattery();
+        
+        const updateBatteryInfo = () => {
+          const level = Math.round(batteryManager.level * 100);
+          setBattery({
+            isSupported: true,
+            level,
+            charging: batteryManager.charging,
+            chargingTime: batteryManager.chargingTime,
+            dischargingTime: batteryManager.dischargingTime,
+            isLow: level <= 20 && !batteryManager.charging,
+            isCritical: level <= 10 && !batteryManager.charging,
+          });
+        };
+
+        // ✅ مقدار اولیه
+        updateBatteryInfo();
+
+        // ✅ گوش دادن به تغییرات (به جای polling!)
+        batteryManager.addEventListener('levelchange', updateBatteryInfo);
+        batteryManager.addEventListener('chargingchange', updateBatteryInfo);
+        batteryManager.addEventListener('chargingtimechange', updateBatteryInfo);
+        batteryManager.addEventListener('dischargingtimechange', updateBatteryInfo);
+      } catch (error) {
+        console.error('Battery API error:', error);
+      }
+    };
+
+    init();
+
+    return () => {
+      if (batteryManager) {
+        batteryManager.removeEventListener('levelchange', () => {});
+        batteryManager.removeEventListener('chargingchange', () => {});
+      }
+    };
+  }, []);
+
+  return battery;
+}
+```
+
+### ۲. کامپوننت هشدار باتری کم
+
+```jsx
+// components/BatteryWarning.jsx
+import { useBatteryStatus } from '@/hooks/useBatteryStatus';
+
+export function BatteryWarning() {
+  const { isSupported, isLow, isCritical, level, charging } = useBatteryStatus();
+
+  // ✅ فقط در مرورگرهای پشتیبانی‌شده و وقتی باتری کمه
+  if (!isSupported || charging) return null;
+  if (!isLow && !isCritical) return null;
+
+  return (
+    <div 
+      role="alert"
+      aria-live="polite"
+      className={`fixed bottom-4 left-4 right-4 md:left-auto md:right-4 md:w-80 
+                  p-4 rounded-lg shadow-lg flex items-start gap-3
+                  ${isCritical ? 'bg-red-600 text-white' : 'bg-yellow-500 text-gray-900'}`}
+    >
+      {/* ✅ آیکون باتری */}
+      <svg className="w-6 h-6 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M17 4H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 14H3V6h14v12zm2-9v4h2v-4h-2z"/>
+        <rect x="5" y="8" width={`${level/100 * 12}`} height="8" fill="currentColor" opacity="0.5"/>
+      </svg>
+
+      <div className="flex-1">
+        <p className="font-medium">
+          {isCritical ? 'باتری دستگاه بسیار کم است!' : 'باتری دستگاه رو به اتمام است'}
+        </p>
+        <p className="text-sm opacity-90 mt-1">
+          {isCritical 
+            ? 'برای جلوگیری از خاموش شدن دستگاه، لطفاً آن را به شارژ بزنید.'
+            : `شارژ باقی‌مانده: ${level}%. برای تجربه بهتر، دستگاه را شارژ کنید.`}
+        </p>
+      </div>
+    </div>
+  );
+}
+```
+
+### ۳. بهینه‌سازی خودکار بر اساس باتری
+
+```jsx
+// hooks/useAdaptivePerformance.js
+import { useBatteryStatus } from './useBatteryStatus';
+
+export function useAdaptivePerformance() {
+  const { isSupported, level, charging, isLow } = useBatteryStatus();
+
+  // ✅ تنظیمات بر اساس وضعیت باتری
+  const config = {
+    // انیمیشن‌ها
+    enableAnimations: !isSupported || charging || level > 20,
+    
+    // کیفیت ویدیو
+    videoQuality: isSupported && isLow ? 'low' : 'high',
+    
+    // فاصله sync با سرور (به ثانیه)
+    syncInterval: isSupported && isLow ? 300 : 60, // 5 دقیقه یا 1 دقیقه
+    
+    // پیش‌بارگذاری (prefetch)
+    enablePrefetch: !isSupported || charging || level > 30,
+    
+    // تعداد درخواست‌های همزمان
+    maxConcurrentRequests: isSupported && isLow ? 2 : 5,
+    
+    // حالت تاریک خودکار (صرفه‌جویی در OLED)
+    preferDarkMode: isSupported && level < 15 && !charging,
+  };
+
+  return config;
+}
+```
+
+### ۴. استفاده در اپلیکیشن
+
+```jsx
+// App.jsx
+import { useAdaptivePerformance } from '@/hooks/useAdaptivePerformance';
+import { BatteryWarning } from '@/components/BatteryWarning';
+
+function App() {
+  const { enableAnimations, syncInterval, enablePrefetch } = useAdaptivePerformance();
+
+  return (
+    <>
+      {/* ✅ انیمیشن‌ها فقط در باتری کافی */}
+      <motion.div
+        animate={enableAnimations ? { y: [0, -10, 0] } : {}}
+        transition={{ duration: 2, repeat: Infinity }}
+      >
+        <h1>خوش آمدید</h1>
+      </motion.div>
+
+      {/* ✅ sync با فاصله متغیر */}
+      <DataSync interval={syncInterval} />
+
+      {/* ✅ prefetch فقط در باتری کافی */}
+      {enablePrefetch && <PrefetchLinks />}
+
+      {/* ✅ هشدار باتری */}
+      <BatteryWarning />
+    </>
+  );
+}
+```
+
+### ۵. کاهش مصرف در Service Worker
+
+```js
+// public/sw.js
+self.addEventListener('sync', (event) => {
+  if (event.tag === 'sync-data') {
+    event.waitUntil(
+      (async () => {
+        // ✅ بررسی باتری قبل از sync سنگین
+        if ('getBattery' in navigator) {
+          const battery = await navigator.getBattery();
+          
+          // اگر باتری کمه و شارژ نمیشه، sync رو به تعویق بنداز
+          if (battery.level < 0.15 && !battery.charging) {
+            console.log('[SW] Low battery, deferring sync');
+            return self.registration.sync.register('sync-data');
+          }
+        }
+
+        // در غیر این صورت sync انجام بشه
+        await syncDataWithServer();
+      })()
+    );
+  }
+});
+```
+
+**🔗 ابزار تست**
+
+- **Chrome DevTools** → Sensors → Battery (شبیه‌سازی وضعیت باتری).
+- **Console**: `navigator.getBattery().then(b => console.log(b.level, b.charging))`.
+- **تست واقعی**: لپ‌تاپ رو از شارژ بکش و ببین اپ چطور واکنش نشون میده.
+- **Safari/Firefox**: تست کن که fallback درست کار می‌کنه (بدون خطا).
+
+**⚠️ چک‌لیست نهایی**
+
+- [ ] fallback برای مرورگرهای بدون پشتیبانی داری؟
+- [ ] از event listener استفاده کردی (نه polling)؟
+- [ ] هشدار باتری کم قابل بستن هست؟
+- [ ] از API برای fingerprinting استفاده نمی‌کنی؟
+- [ ] در حالت شارژ، هشدار رو نشون نمی‌دی؟
+- [ ] انیمیشن‌ها در باتری کم کاهش پیدا می‌کنن؟
+- [ ] در Safari/Firefox بدون خطا کار می‌کنه؟
+- [ ] در DevTools → Sensors تست کردی؟
+
+> **قانون ۳ ثانیه‌ای:** DevTools → Sensors → Battery رو باز کن، سطح رو روی ۱۰٪ بذار و شارژ رو خاموش کن. آیا اپ شما واکنشی نشون میده (هشدار، کاهش انیمیشن، تغییر sync)؟ اگر نه، یعنی از Battery API استفاده بهینه نمی‌کنی! بعد Safari رو باز کن و مطمئن شو بدون خطا کار می‌کنه.
