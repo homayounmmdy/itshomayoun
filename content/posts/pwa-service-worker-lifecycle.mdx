@@ -1,0 +1,285 @@
+---
+title: "PWA: Service Worker و مدیریت چرخه‌ی حیات"
+date: '2026-09-24'
+playlist: 'PWA - برنامه وب پیشرونده'
+tags: ['PWA', 'Service-Worker', 'Lifecycle', 'Cache-Versioning', 'skipWaiting', 'Frontend', 'React']
+description: "چرخه‌ی حیات Service Worker چطور کار می‌کنه، چرا آپدیت‌ها گاهی اعمال نمیشن و چطور با skipWaiting و clients.claim کنترل کامل روی lifecycle داشته باشیم."
+enableComment: true
+---
+
+# ⚙️ PWA: Service Worker و مدیریت چرخه‌ی حیات
+
+**💡 مفهوم کلیدی**  
+Service Worker یه **لایه‌ی پروکسی** بین مرورگر و شبکه‌ست که در پس‌زمینه اجرا میشه. چرخه‌ی حیات (Lifecycle) اون شامل ۶ مرحله‌ی کلیدیه: **Register → Install → Waiting → Activate → Fetch → Terminate**. درک این چرخه برای **آپدیت درست cache**، **کنترل نسخه** و **جلوگیری از باگ‌های عجیب** حیاتیه.
+
+**⚠️ دام رایج**  
+- فراموش کردن `skipWaiting()` → SW جدید تا بستن همه‌ی تب‌ها فعال نمیشه.
+- عدم پاک کردن cache قدیمی در `activate` → پر شدن فضای ذخیره‌سازی.
+- استفاده از نام ثابت برای cache (مثل `app-cache`) → آپدیت‌ها اعمال نمیشن.
+- ثبت SW در هر رندر → چندین SW همزمان!
+- عدم بررسی `controller` بعد از فعال‌سازی → صفحه‌ی فعلی با SW قدیمی کار می‌کنه.
+- نادیده گرفتن رویداد `message` برای ارتباط بین SW و UI.
+
+**📏 مراحل چرخه‌ی حیات Service Worker**
+
+1. **Register** → مرورگر SW رو پیدا و دانلود می‌کنه
+2. **Install** → cache کردن assets اولیه (precaching)
+3. **Waiting** → منتظر بستن تب‌های قدیمی (پیش‌فرض)
+4. **Activate** → پاک کردن cache قدیمی، takeover
+5. **Fetch** → کنترل درخواست‌های شبکه
+6. **Terminate** → مرورگر SW رو می‌بنده (صرفه‌جویی در منابع)
+
+**🛠️ راه‌حل سریع در کد**
+
+### ۱. ثبت Service Worker (یک‌بار، درست)
+
+```jsx
+// lib/registerSW.js
+export async function registerServiceWorker() {
+  if (!('serviceWorker' in navigator)) {
+    console.warn('Service Worker پشتیبانی نمیشه');
+    return;
+  }
+
+  try {
+    const registration = await navigator.serviceWorker.register('/sw.js', {
+      scope: '/',
+      // ✅ نوع آپدیت: هر ۲۴ ساعت یا با رفرش دستی
+      updateViaCache: 'none',
+    });
+
+    console.log('SW registered:', registration.scope);
+
+    // ✅ گوش دادن به آپدیت‌ها
+    registration.addEventListener('updatefound', () => {
+      const newWorker = registration.installing;
+      console.log('SW update found');
+
+      newWorker.addEventListener('statechange', () => {
+        console.log('SW state:', newWorker.state);
+      });
+    });
+
+    return registration;
+  } catch (error) {
+    console.error('SW registration failed:', error);
+  }
+}
+```
+
+### ۲. مدیریت Lifecycle در Service Worker
+
+```js
+// public/sw.js
+const CACHE_VERSION = 'v2'; // ✅ هر آپدیت، نسخه رو عوض کن
+const CACHE_NAME = `app-${CACHE_VERSION}`;
+const PRECACHE_ASSETS = [
+  '/',
+  '/offline.html',
+  '/styles.css',
+  '/app.js',
+];
+
+// ✅ مرحله ۱: Install - cache کردن assets اولیه
+self.addEventListener('install', (event) => {
+  console.log('[SW] Installing...');
+  
+  event.waitUntil(
+    caches.open(CACHE_NAME).then((cache) => {
+      console.log('[SW] Precaching assets');
+      return cache.addAll(PRECACHE_ASSETS);
+    })
+  );
+
+  // ✅ رفتن مستقیم به مرحله activate (بدون waiting)
+  self.skipWaiting();
+});
+
+// ✅ مرحله ۲: Activate - پاک کردن cache قدیمی و takeover
+self.addEventListener('activate', (event) => {
+  console.log('[SW] Activating...');
+
+  event.waitUntil(
+    (async () => {
+      // ✅ پاک کردن تمام cache‌های قدیمی
+      const cacheKeys = await caches.keys();
+      await Promise.all(
+        cacheKeys
+          .filter((key) => key.startsWith('app-') && key !== CACHE_NAME)
+          .map((key) => {
+            console.log(`[SW] Deleting old cache: ${key}`);
+            return caches.delete(key);
+          })
+      );
+
+      // ✅ takeover: کنترل همه‌ی کلاینت‌های باز
+      await self.clients.claim();
+      console.log('[SW] Activated & claimed all clients');
+    })()
+  );
+});
+
+// ✅ مرحله ۳: Fetch - کنترل درخواست‌ها
+self.addEventListener('fetch', (event) => {
+  // ✅ فقط درخواست‌های same-origin
+  if (!event.request.url.startsWith(self.location.origin)) return;
+
+  event.respondWith(
+    caches.match(event.request).then((cached) => {
+      // ✅ Cache First با network fallback
+      return cached || fetch(event.request).then((response) => {
+        // ✅ cache کردن پاسخ‌های موفق
+        if (response.ok) {
+          const clone = response.clone();
+          caches.open(CACHE_NAME).then((cache) => {
+            cache.put(event.request, clone);
+          });
+        }
+        return response;
+      });
+    })
+  );
+});
+
+// ✅ مرحله ۴: Message - ارتباط با UI
+self.addEventListener('message', (event) => {
+  if (event.data?.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  }
+  
+  if (event.data?.type === 'GET_VERSION') {
+    event.source.postMessage({ type: 'VERSION', version: CACHE_VERSION });
+  }
+});
+```
+
+### ۳. هوک React برای مدیریت Lifecycle
+
+```jsx
+// hooks/useServiceWorker.js
+import { useState, useEffect } from 'react';
+
+export function useServiceWorker() {
+  const [status, setStatus] = useState('idle'); // idle | registering | active | waiting | updating
+  const [registration, setRegistration] = useState(null);
+  const [needRefresh, setNeedRefresh] = useState(false);
+
+  useEffect(() => {
+    if (!('serviceWorker' in navigator)) return;
+
+    const init = async () => {
+      setStatus('registering');
+      
+      const reg = await navigator.serviceWorker.register('/sw.js', {
+        updateViaCache: 'none',
+      });
+      setRegistration(reg);
+      setStatus('active');
+
+      // ✅ تشخیص SW جدید در حالت waiting
+      if (reg.waiting) {
+        setStatus('waiting');
+        setNeedRefresh(true);
+      }
+
+      // ✅ گوش دادن به آپدیت جدید
+      reg.addEventListener('updatefound', () => {
+        const newWorker = reg.installing;
+        
+        newWorker.addEventListener('statechange', () => {
+          if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+            // ✅ SW جدید آماده‌ست، منتظر تایید کاربر
+            setStatus('waiting');
+            setNeedRefresh(true);
+          }
+        });
+      });
+
+      // ✅ وقتی controller عوض شد (بعد از آپدیت)
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        console.log('[React] New controller active, reloading...');
+        window.location.reload();
+      });
+    };
+
+    init();
+  }, []);
+
+  // ✅ اعمال آپدیت
+  const applyUpdate = () => {
+    if (registration?.waiting) {
+      registration.waiting.postMessage({ type: 'SKIP_WAITING' });
+    }
+  };
+
+  return { status, needRefresh, applyUpdate, registration };
+}
+```
+
+### ۴. کامپوننت اعلان آپدیت
+
+```jsx
+// components/UpdatePrompt.jsx
+import { useServiceWorker } from '@/hooks/useServiceWorker';
+
+export function UpdatePrompt() {
+  const { needRefresh, applyUpdate } = useServiceWorker();
+
+  if (!needRefresh) return null;
+
+  return (
+    <div 
+      role="alert"
+      className="fixed bottom-4 right-4 bg-blue-600 text-white p-4 rounded-lg shadow-lg flex items-center gap-3"
+    >
+      <p className="text-sm">نسخه‌ی جدید آماده‌ست!</p>
+      <button
+        onClick={applyUpdate}
+        className="bg-white text-blue-600 px-3 py-1 rounded font-medium hover:bg-blue-50"
+      >
+        به‌روزرسانی
+      </button>
+    </div>
+  );
+}
+```
+
+### ۵. پاک کردن دستی Cache (برای دیباگ)
+
+```jsx
+// ✅ در Console یا با یه دکمه‌ی مخفی
+async function clearAllCaches() {
+  const keys = await caches.keys();
+  await Promise.all(keys.map((key) => caches.delete(key)));
+  
+  const registrations = await navigator.serviceWorker.getRegistrations();
+  await Promise.all(registrations.map((reg) => reg.unregister()));
+  
+  console.log('✅ All caches and SW cleared. Reload the page.');
+}
+```
+
+**🔗 ابزار تست و دیباگ**
+
+- **Chrome DevTools** → Application → Service Workers:
+  - وضعیت فعلی SW (installing / waiting / activated / redundant)
+  - دکمه‌ی "Skip waiting" برای تست دستی
+  - "Bypass for network" برای غیرفعال کردن cache
+  - "Update" برای فورس کردن آپدیت
+- **Application** → Cache Storage: مشاهده‌ی cache‌های مختلف
+- **Application** → Clear Storage: پاک کردن همه‌چیز با یک کلیک
+- **Console**: `navigator.serviceWorker.controller` → SW فعال فعلی
+- **Workbox** → `workbox-window` برای مدیریت lifecycle در UI
+
+**⚠️ چک‌لیست نهایی**
+
+- [ ] SW با `updateViaCache: 'none'` ثبت شده؟
+- [ ] از `skipWaiting()` در `install` استفاده کردی؟
+- [ ] از `clients.claim()` در `activate` استفاده کردی؟
+- [ ] cache قدیمی در `activate` پاک میشه؟
+- [ ] نام cache شامل نسخه‌ست (مثل `app-v2`)؟
+- [ ] رویداد `message` برای اعمال آپدیت پیاده‌سازی شده؟
+- [ ] UI برای اعلان آپدیت به کاربر داری؟
+- [ ] در DevTools چرخه‌ی حیات رو تست کردی؟
+
+> **قانون ۳ ثانیه‌ای:** DevTools → Application → Service Workers رو باز کن. آیا SW وضعیت `activated` و `running` داره؟ بعد Cache Storage رو چک کن؛ اگه چندین cache با نام‌های قدیمی دیدی، یعنی cleanup در `activate` کار نمی‌کنه! در نهایت، یه تغییر کوچیک توی SW بده و ببین بعد از رفرش، نسخه‌ی جدید فعال میشه یا نه.
