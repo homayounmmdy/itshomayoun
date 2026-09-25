@@ -1,109 +1,108 @@
 ---
-title: "حرکت و انیمیشن (Motion & Animation)"
-date: '2026-09-22'
-playlist: 'چک لیست: دسترسی پذیری'
-tags: ['a11y', 'Accessibility', 'Motion', 'Animation', 'WCAG', 'CSS', 'prefers-reduced-motion']
-description: "چرا انیمیشن‌های چشمک‌زن و parallax سنگین می‌تونه برای بخشی از کاربران خطرناک باشه و چطور با prefers-reduced-motion ازشون جلوگیری کنیم."
+title: "اهداف لمسی و زوم (Touch Target & Zoom)"
+date: "2026-09-23"
+playlist: "چک لیست: دسترسی پذیری"
+tags:
+  [
+    "a11y",
+    "Accessibility",
+    "Touch-Target",
+    "Zoom",
+    "WCAG",
+    "Mobile",
+    "Responsive",
+  ]
+description: "چرا دکمه‌های ۲۰ پیکسلی و غیرفعال کردن زوم، بخشی از کاربران رو کاملاً از سایتت محروم می‌کنه و چطور این مشکل رو حل کنیم."
 enableComment: true
 ---
 
-# 🎬 حرکت و انیمیشن (Motion & Animation)
+# 👆 اهداف لمسی و زوم (Touch Target & Zoom)
 
 **💡 مفهوم کلیدی**  
-انیمیشن‌ها وقتی خوب طراحی بشن، تجربه کاربری رو بهتر می‌کنن. اما برای کاربران مبتلا به **vestibular disorders** (اختلالات سیستم تعادلی)، میگرن، یا حساسیت به نور، انیمیشن‌های سنگین می‌تونه باعث **سرگیجه، تهوع، و حتی تشنج** بشه.
+دو مشکل بزرگ در موبایل و برای کاربران کم‌بینا:  
+۱. دکمه‌ها/لینک‌هایی که آنقدر کوچک یا نزدیک به هم هستند که با انگشت نمی‌شه دقیق روشون زد.  
+۲. سایت‌هایی که زوم کردن رو غیرفعال کردن یا با زوم کردن لی‌اوت می‌شکنه.
 
-**⚠️ دام رایج**  
-- انیمیشن‌های parallax سنگین هنگام اسکرول.
-- المان‌های چشمک‌زن (بیش از ۳ بار در ثانیه).
-- ویدیوهایی که با صدا به صورت خودکار پخش میشن.
-- ترنزیشن‌های چرخشی یا zoom روی کل صفحه.
-- نادیده گرفتن تنظیمات سیستم‌عامل کاربر.
+**⚠️ دام رایج**
 
-**📏 استاندارد WCAG**  
-- **SC 2.3.1 (Level A)**: محتوا نباید بیش از ۳ بار در ثانیه چشمک بزنه (یا باید هشدار داده بشه).
-- **SC 2.3.3 (Level AAA)**: انیمیشن‌هایی که از طریق تعامل شروع میشن باید قابلیت غیرفعال شدن داشته باشن.
-- **SC 2.2.2 (Level A)**: کاربر باید بتونه انیمیشن‌های خودکار (مثل اسلایدر) رو متوقف کنه.
+- آیکون‌های شبکه‌های اجتماعی با اندازه‌ی ۱۶×۱۶ پیکسل.
+- لینک‌های متنی چسبیده به هم بدون فاصله (مثل "ویرایش | حذف").
+- اضافه کردن `user-scalable=no` یا `maximum-scale=1` در viewport meta.
+- استفاده از `font-size` ثابت با `px` که با زوم بزرگ نمیشه.
+
+**📏 استاندارد WCAG**
+
+- **حداقل اندازه هدف لمسی**: ۲۴×۲۴ پیکسل (WCAG 2.2 Level AA) و ترجیحاً ۴۴×۴۴ (Level AAA).
+- **زوم**: کاربر باید بتونه تا **۲۰۰٪** زوم کنه بدون اینکه محتوا قطع بشه یا نیاز به اسکرول افقی پیدا کنه (SC 1.4.4).
+- **غیرفعال نکردن زوم**: هرگز `user-scalable=no` نذار.
 
 **🛠️ راه‌حل سریع در کد**
 
-### ۱. CSS: احترام به `prefers-reduced-motion`
+### ۱. هدف لمسی کافی
+
 ```css
-/* ❌ اشتباه: انیمیشن همیشگی بدون راه فرار */
-.hero-title {
-  animation: slideIn 1s ease-out;
+/* ❌ اشتباه: آیکون ۱۶ پیکسلی بدون padding */
+.icon-btn {
+  width: 16px;
+  height: 16px;
 }
 
-/* ✅ درست: انیمیشن فقط برای کاربرانی که مشکلی ندارن */
-@media (prefers-reduced-motion: no-preference) {
-  .hero-title {
-    animation: slideIn 1s ease-out;
-  }
-}
-
-/* ✅ جایگزین ساده برای کاربران حساس */
-@media (prefers-reduced-motion: reduce) {
-  .hero-title {
-    animation: none;
-    opacity: 1; /* فقط fade ساده یا بدون تغییر */
-  }
-  
-  *, *::before, *::after {
-    animation-duration: 0.01ms !important;
-    transition-duration: 0.01ms !important;
-    scroll-behavior: auto !important;
-  }
+/* ✅ درست: منطقه‌ی کلیکی ۴۴×۴۴ حتی اگر آیکون کوچک باشه */
+.icon-btn {
+  min-width: 44px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px; /* ✅ فاصله‌ی امن بین دکمه‌های کناری */
 }
 ```
 
-### ۲. JavaScript: بررسی تنظیمات کاربر
-```jsx
-// ✅ هوک React برای تشخیص ترجیح کاربر
-function useReducedMotion() {
-  const [reduced, setReduced] = useState(() => {
-    if (typeof window === 'undefined') return false;
-    return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  });
+### ۲. viewport درست
 
-  useEffect(() => {
-    const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
-    const handler = (e) => setReduced(e.matches);
-    mq.addEventListener('change', handler);
-    return () => mq.removeEventListener('change', handler);
-  }, []);
-
-  return reduced;
-}
-
-// استفاده در کامپوننت
-function Hero() {
-  const reducedMotion = useReducedMotion();
-  
-  return (
-    <motion.div
-      animate={reducedMotion ? {} : { y: [0, -20, 0] }}
-      transition={{ duration: 2, repeat: Infinity }}
-    >
-      <h1>خوش آمدید</h1>
-    </motion.div>
-  );
-}
-```
-
-### ۳. ویدیو و محتوای خودکار
 ```html
-<!-- ❌ اشتباه: ویدیو با صدا و autoplay -->
-<video src="promo.mp4" autoplay></video>
+<!-- ❌ اشتباه: زوم رو قفل می‌کنه -->
+<meta
+  name="viewport"
+  content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no"
+/>
 
-<!-- ✅ درست: بدون صدا، با کنترل و قابلیت توقف -->
-<video src="promo.mp4" autoplay muted loop controls>
-  <track kind="captions" src="captions.vtt" srclang="fa" label="فارسی" />
-</video>
+<!-- ✅ درست: اجازه‌ی زوم کامل -->
+<meta name="viewport" content="width=device-width, initial-scale=1" />
 ```
 
-**🔗 ابزار تست**  
-- **ویندوز**: Settings → Ease of Access → Display → Show animations (خاموش کن).
-- **مک**: System Preferences → Accessibility → Display → Reduce motion.
-- **iOS/Android**: در تنظیمات Accessibility گزینه‌ی Reduce Motion رو فعال کن.
-- **Chrome DevTools**: Rendering → Emulate CSS media feature `prefers-reduced-motion`.
+### ۳. فاصله بین لینک‌های کناری
 
-> **قانون ۳ ثانیه‌ای:** توی سیستم‌عاملت `Reduce Motion` رو فعال کن، بعد سایتت رو باز کن. اگر هنوز هم المانی می‌چرخه، می‌پره، یا چشمک می‌زنه، یعنی به ترجیح کاربر احترام نذاشتی!
+```jsx
+// ❌ اشتباه: لینک‌ها چسبیده به هم
+<a href="/edit">ویرایش</a>
+<a href="/delete">حذف</a>
+
+// ✅ درست: با فاصله یا در دکمه‌های مجزا
+<div className="flex gap-4">
+  <button className="min-h-[44px] px-4">ویرایش</button>
+  <button className="min-h-[44px] px-4">حذف</button>
+</div>
+```
+
+### ۴. استفاده از واحدهای نسبی
+
+```css
+/* ❌ اشتباه: فونت با px ثابت */
+.title {
+  font-size: 16px;
+}
+
+/* ✅ درست: با rem که به تنظیمات کاربر احترام می‌ذاره */
+.title {
+  font-size: 1.25rem;
+}
+```
+
+**🔗 ابزار تست**
+
+- **Chrome DevTools** → Rendering → Enable CSS overview (برای بررسی اندازه‌ها).
+- **Lighthouse** → بخش Accessibility → چک "Touch targets are sized appropriately".
+- تست دستی: روی موبایل واقعی با انگشت شست امتحان کن!
+
+> **قانون ۳ ثانیه‌ای:** سایت رو روی موبایل باز کن، با انگشت شست روی یه دکمه‌ی کوچک بزن. اگر ۲ بار از ۳ بار اشتباه زدی (یا روی دکمه‌ی کناری رفتی)، یعنی Touch Target مشکل داره. بعد `Ctrl +` رو ۳ بار بزن؛ اگر لی‌اوت شکست، یعنی مشکل Zoom داری.

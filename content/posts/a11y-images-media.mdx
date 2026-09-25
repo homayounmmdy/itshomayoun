@@ -1,165 +1,112 @@
 ---
-title: "محتوای پویا و مناطق زنده (Dynamic Content & Live Regions)"
-date: '2026-09-20'
-playlist: 'چک لیست: دسترسی پذیری'
-tags: ['a11y', 'Accessibility', 'Live-Regions', 'aria-live', 'WCAG', 'React', 'SPA']
-description: "چرا در SPAها (مثل React) کاربر اسکرین‌ریدر از تغییرات محتوا بی‌خبر می‌مونه و چطور با aria-live و role‌های مناسب این مشکل رو حل کنیم."
+title: "تصاویر و رسانه (Images & Media)"
+date: "2026-09-21"
+playlist: "چک لیست: دسترسی پذیری"
+tags:
+  ["a11y", "Accessibility", "Images", "Media", "WCAG", "alt-text", "Captions"]
+description: "چرا عکس‌های بدون alt و ویدیوهای بدون زیرنویس، بخشی از کاربران رو کاملاً از محتوای سایتت محروم می‌کنه و چطور این مشکل رو حل کنیم."
 enableComment: true
 ---
 
-# 🔔 محتوای پویا و مناطق زنده (Dynamic Content & Live Regions)
+# 🖼️ تصاویر و رسانه (Images & Media)
 
 **💡 مفهوم کلیدی**  
-در سایت‌های سنتی، وقتی صفحه عوض میشه، اسکرین‌ریدر کل صفحه رو از اول می‌خونه. اما در **SPAها (React, Vue, Angular)**، محتوا بدون رفرش تغییر می‌کنه و اسکرین‌ریدر **هیچ‌چیز نمی‌فهمه**! کاربر باید کل صفحه رو دستی بگرده تا بفهمه چی عوض شده.
+کاربران نابینا یا کم‌بینا به **متن جایگزین** برای درک تصاویر و به **زیرنویس/رونوشت** برای درک ویدیو و صدا نیاز دارن. رسانه بدون این جایگزین‌ها، برای این کاربران اصلاً وجود نداره.
 
-**⚠️ دام رایج**  
-- Toast notification که ظاهر میشه ولی اسکرین‌ریدر نمی‌خونتش.
-- اضافه شدن آیتم به سبد خرید بدون هیچ اعلانی.
-- نمایش پیام خطای فرم بدون اتصال به اینپوت.
-- تغییر روت در Next.js بدون تغییر `document.title`.
-- Loading spinner که فقط بصریه و اسکرین‌ریدر نمی‌فهمه چیزی در حال بارگذاریه.
+**⚠️ دام رایج**
 
-**📏 استاندارد WCAG**  
-- **SC 4.1.3 (Level AA)**: پیام‌های وضعیت (Status Messages) باید با استفاده از role یا ویژگی‌های ARIA به کاربر اطلاع داده بشن، بدون اینکه فوکوس رو بگیرن.
+- `alt="تصویر"` یا `alt="image123.jpg"` یا کلاً حذف `alt`.
+- ویدیوهای آموزشی بدون زیرنویس.
+- اینفوگرافیک‌ها بدون توضیح متنی جایگزین.
+- پادکست‌ها بدون transcript.
+- autoplay ویدیو با صدا.
+
+**📏 استاندارد WCAG**
+
+- **SC 1.1.1 (Level A)**: تمام تصاویر غیرتزئینی باید `alt` معنادار داشته باشن.
+- **SC 1.2.2 (Level A)**: ویدیوهای pre-recorded باید زیرنویس (Captions) داشته باشن.
+- **SC 1.2.1 (Level A)**: محتوای صوتی pre-recorded باید transcript داشته باشه.
+- **SC 1.4.2 (Level A)**: هیچ صدایی نباید به صورت خودکار بیش از ۳ ثانیه پخش بشه، مگر اینکه مکانیزم توقف/کاهش صدا وجود داشته باشه.
 
 **🛠️ راه‌حل سریع در کد**
 
-### ۱. استفاده از `aria-live` برای مناطق پویا
+### ۱. تصاویر: alt درست
+
 ```jsx
-// ❌ اشتباه: پیام موفقیت بدون اعلام به اسکرین‌ریدر
-function Toast({ message }) {
-  return <div className="toast">{message}</div>;
-}
+// ❌ اشتباه: alt خالی برای تصویر اطلاعاتی
+<img src="product.jpg" />
+<img src="product.jpg" alt="تصویر" />
 
-// ✅ درست: با aria-live="polite" (بعد از پایان کار فعلی اسکرین‌ریدر می‌خونه)
-function Toast({ message }) {
-  return (
-    <div className="toast" role="status" aria-live="polite">
-      {message}
-    </div>
-  );
-}
+// ✅ درست: alt معنادار که محتوای تصویر رو توصیف می‌کنه
+<img src="product.jpg" alt="کفش ورزشی نایکی مدل Air Max، رنگ مشکی با زیره سفید" />
 
-// ✅ درست: با aria-live="assertive" (فوراً اعلام میشه - برای خطاها)
-function ErrorBanner({ message }) {
-  return (
-    <div className="error-banner" role="alert" aria-live="assertive">
-      {message}
-    </div>
-  );
-}
+// ✅ درست: alt خالی برای تصویر کاملاً تزئینی (اسکرین‌ریدر ازش رد میشه)
+<img src="divider-wave.svg" alt="" role="presentation" />
 ```
 
-### ۲. تفاوت `polite` و `assertive`
-```jsx
-// polite: صبر می‌کنه تا اسکرین‌ریدر کار فعلیش تموم بشه
-// مناسب برای: پیام‌های موفقیت، اعلان‌های غیرضروری
-<div aria-live="polite">۳ آیتم به سبد خرید اضافه شد</div>
+### ۲. تصاویر پیچیده (نمودار، اینفوگرافیک)
 
-// assertive: فوراً حرف اسکرین‌ریدر رو قطع می‌کنه
-// مناسب برای: خطاها، هشدارهای امنیتی، تایمرهای مهم
-<div aria-live="assertive">زمان جلسه شما به پایان رسید</div>
+```jsx
+// ✅ استفاده از figure و figcaption برای توضیح طولانی
+<figure>
+  <img src="sales-chart.png" alt="نمودار فروش سه‌ماهه اول ۱۴۰۵" />
+  <figcaption>
+    فروش در فروردین ۱۲۰ میلیون، اردیبهشت ۱۵۰ میلیون و خرداد ۱۸۰ میلیون تومان
+    بوده.
+  </figcaption>
+</figure>
 ```
 
-### ۳. Loading states دسترس‌پذیر
-```jsx
-// ❌ اشتباه: فقط spinner بصری
-function Loading() {
-  return <div className="spinner" />;
-}
+### ۳. ویدیو با زیرنویس
 
-// ✅ درست: با aria-live و aria-busy
-function Loading() {
-  return (
-    <div aria-live="polite" aria-busy="true">
-      <div className="spinner" aria-hidden="true" />
-      <span className="sr-only">در حال بارگذاری...</span>
-    </div>
-  );
-}
+```html
+<!-- ❌ اشتباه: ویدیو بدون زیرنویس -->
+<video src="tutorial.mp4" controls></video>
 
-// ✅ بعد از لود شدن:
-function Content({ data }) {
-  return (
-    <div aria-live="polite" aria-busy="false">
-      {data.map(item => <div key={item.id}>{item.name}</div>)}
-    </div>
-  );
-}
+<!-- ✅ درست: با زیرنویس فارسی و انگلیسی -->
+<video src="tutorial.mp4" controls>
+  <track
+    kind="captions"
+    src="captions-fa.vtt"
+    srclang="fa"
+    label="فارسی"
+    default
+  />
+  <track kind="captions" src="captions-en.vtt" srclang="en" label="English" />
+</video>
 ```
 
-### ۴. تغییر روت و document.title
+### ۴. پادکست/صدا با transcript
+
 ```jsx
-// ❌ اشتباه: تغییر روت بدون تغییر title
-<Link href="/products">محصولات</Link>
-
-// ✅ درست: در Next.js با useEffect یا next/head
-import Head from 'next/head';
-
-function ProductsPage() {
-  return (
-    <>
-      <Head>
-        <title>محصولات - نام سایت</title>
-      </Head>
-      <main>...</main>
-    </>
-  );
-}
-
-// ✅ یا با useEffect برای تغییر title
-useEffect(() => {
-  document.title = 'محصولات - نام سایت';
-}, []);
+// ✅ ارائه‌ی transcript قابل دسترس کنار پلیر
+<audio src="episode-12.mp3" controls />
+<details>
+  <summary>مشاهده‌ی متن کامل (Transcript)</summary>
+  <p>متن کامل پادکست اینجا قرار می‌گیره...</p>
+</details>
 ```
 
-### ۵. فرم‌ها و پیام‌های خطا
-```jsx
-// ❌ اشتباه: پیام خطا بدون اتصال به اینپوت
-<input type="email" />
-<p className="error">ایمیل نامعتبر است</p>
+### ۵. SVG و آیکون‌ها
 
-// ✅ درست: با aria-describedby و aria-invalid
-function EmailInput({ error }) {
-  const errorId = 'email-error';
-  
-  return (
-    <>
-      <label htmlFor="email">ایمیل</label>
-      <input 
-        id="email"
-        type="email"
-        aria-invalid={!!error}
-        aria-describedby={error ? errorId : undefined}
-      />
-      {error && (
-        <p id={errorId} role="alert" className="error">
-          {error}
-        </p>
-      )}
-    </>
-  );
-}
+```jsx
+// ❌ اشتباه: SVG تزئینی که اسکرین‌ریدر می‌خونه
+<svg><path d="..." /></svg>
+
+// ✅ درست: SVG تزئینی رو مخفی کن
+<svg aria-hidden="true" focusable="false"><path d="..." /></svg>
+
+// ✅ درست: SVG اطلاعاتی با عنوان
+<svg role="img" aria-labelledby="icon-title">
+  <title id="icon-title">جستجو</title>
+  <path d="..." />
+</svg>
 ```
 
-### ۶. شمارنده‌ها و آمار پویا
-```jsx
-// ✅ استفاده از aria-live برای شمارنده‌ها
-function CartCount({ count }) {
-  return (
-    <button className="cart-btn">
-      سبد خرید
-      <span aria-live="polite" className="badge">
-        {count}
-      </span>
-    </button>
-  );
-}
-```
+**🔗 ابزار تست**
 
-**🔗 ابزار تست**  
-- **اسکرین‌ریدر**: VoiceOver (مک) یا NVDA (ویندوز) رو روشن کن و ببین وقتی محتوا تغییر می‌کنه، اعلام میشه یا نه.
-- **Chrome DevTools** → Accessibility → بررسی "Live Region" در Properties.
-- افزونه **Accessibility Insights** → بخش "Live regions".
+- افزونه مرورگر **WAVE** یا **axe DevTools** → بخش "Images without alt text".
+- **Lighthouse** → Accessibility → "Image elements have `alt` attributes".
+- تست دستی: با اسکرین‌ریدر (VoiceOver/NVDA) روی تک‌تک تصاویر برو و ببین چی می‌خونه.
 
-> **قانون ۳ ثانیه‌ای:** اسکرین‌ریدر رو روشن کن، یه دکمه بزن که محتوا رو تغییر میده (مثل اضافه به سبد). اگر اسکرین‌ریدر هیچ چیزی نگفت، یعنی `aria-live` یا `role` مناسب نداری!
+> **قانون ۳ ثانیه‌ای:** توی DevTools، همه‌ی تصاویر رو با `img:not([alt])` سرچ کن. هر نتیجه‌ای که اومد، یعنی یه تصویر بدون alt داری. بعد CSS بزن `img { outline: 3px solid red; }` تا همه‌ی تصاویر رو ببینی و از خودت بپرس: «اگه این عکس لود نشه، کاربر چی از دست می‌ده؟» جواب همون `alt` هست.
