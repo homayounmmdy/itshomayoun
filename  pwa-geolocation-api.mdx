@@ -1,0 +1,426 @@
+---
+title: "PWA: Geolocation API و موقعیت مکانی کاربر"
+date: '2026-09-24'
+playlist: 'PWA - برنامه وب پیشرونده'
+tags: ['PWA', 'Geolocation-API', 'Location', 'Device-API', 'Privacy', 'React', 'Maps']
+description: "چطور با Geolocation API موقعیت کاربر رو بگیریم، با رد شدن مجوز کنار بیایم و از مصرف باتری جلوگیری کنیم."
+enableComment: true
+---
+
+# 📍 PWA: Geolocation API و موقعیت مکانی کاربر
+
+**💡 مفهوم کلیدی**  
+Geolocation API به سایت اجازه میده **موقعیت مکانی کاربر** (عرض و طول جغرافیایی) رو با اجازه‌ی خودش بگیره. برای اپ‌هایی مثل نقشه، رستوران‌یاب، یا سرویس‌های محلی حیاتیه. اما **حریم خصوصی** و **مصرف باتری** دو چالش اصلی هستن.
+
+**⚠️ دام رایج**  
+- درخواست موقعیت بلافاصله بعد از لود (کاربر هنوز اعتماد نکرده!).
+- استفاده از `enableHighAccuracy: true` همیشه (باتری رو می‌بلعه!).
+- فراموش کردن HTTPS (Geolocation فقط روی HTTPS کار می‌کنه).
+- عدم مدیریت خطای `PERMISSION_DENIED` (کاربر مجوز رو رد کرده).
+- عدم ارائه‌ی fallback وقتی کاربر مجوز نمیده.
+- عدم توقف `watchPosition` بعد از اتمام کار (leak منابع!).
+- نادیده گرفتن `maximumAge` و درخواست موقعیت جدید هر بار.
+
+**📏 وضعیت پشتیبانی مرورگرها**
+
+| مرورگر       | پشتیبانی | محدودیت                                  |
+|--------------|-----------|-------------------------------------------|
+| Chrome       | ✅        | فقط HTTPS (به جز localhost)              |
+| Firefox      | ✅        | فقط HTTPS                                |
+| Safari       | ✅        | فقط HTTPS + نیاز به user gesture در iOS  |
+| Edge         | ✅        | فقط HTTPS                                |
+| iOS Safari   | ✅        | نیاز به تعامل کاربر                      |
+| Samsung      | ✅        | کامل                                     |
+
+> ⚠️ **نکته حیاتی**: این API **فقط روی HTTPS** کار می‌کنه. در `http://` خطا میده (به جز `localhost` برای توسعه).
+
+**🛠️ راه‌حل سریع در کد**
+
+### ۱. هوک React برای مدیریت موقعیت
+
+```jsx
+// hooks/useGeolocation.js
+import { useState, useEffect, useCallback, useRef } from 'react';
+
+export function useGeolocation(options = {}) {
+  const [position, setPosition] = useState(null);
+  const [error, setError] = useState(null);
+  const [status, setStatus] = useState('idle'); // idle | loading | success | error | denied
+  const watchIdRef = useRef(null);
+
+  const defaultOptions = {
+    enableHighAccuracy: false, // ✅ false برای صرفه‌جویی در باتری
+    timeout: 10000,            // ۱۰ ثانیه
+    maximumAge: 300000,        // ۵ دقیقه cache
+    ...options,
+  };
+
+  // ✅ گرفتن یک‌باره موقعیت
+  const getLocation = useCallback(() => {
+    if (!('geolocation' in navigator)) {
+      setError('مرورگر شما از موقعیت مکانی پشتیبانی نمی‌کند');
+      setStatus('error');
+      return;
+    }
+
+    setStatus('loading');
+    setError(null);
+
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setPosition({
+          latitude: pos.coords.latitude,
+          longitude: pos.coords.longitude,
+          accuracy: pos.coords.accuracy,
+          altitude: pos.coords.altitude,
+          speed: pos.coords.speed,
+          timestamp: pos.timestamp,
+        });
+        setStatus('success');
+      },
+      (err) => {
+        handleError(err);
+      },
+      defaultOptions
+    );
+  }, [defaultOptions]);
+
+  // ✅ ردیابی مداوم موقعیت
+  const startWatching = useCallback(() => {
+    if (!('geolocation' in navigator)) return;
+
+    setStatus('loading');
+
+    watchIdRef.current = navigator.geolocation.watchPosition(
+      (pos) => {
+        setPosition({
+          latitude: pos.coords.latitude,
+          longitude: pos.coords.longitude,
+          accuracy: pos.coords.accuracy,
+          timestamp: pos.timestamp,
+        });
+        setStatus('success');
+      },
+      handleError,
+      defaultOptions
+    );
+  }, [defaultOptions]);
+
+  // ✅ توقف ردیابی
+  const stopWatching = useCallback(() => {
+    if (watchIdRef.current !== null) {
+      navigator.geolocation.clearWatch(watchIdRef.current);
+      watchIdRef.current = null;
+    }
+  }, []);
+
+  // ✅ مدیریت خطا
+  const handleError = (err) => {
+    switch (err.code) {
+      case err.PERMISSION_DENIED:
+        setError('دسترسی به موقعیت مکانی رد شد. لطفاً از تنظیمات مرورگر اجازه دهید.');
+        setStatus('denied');
+        break;
+      case err.POSITION_UNAVAILABLE:
+        setError('موقعیت مکانی در دسترس نیست.');
+        setStatus('error');
+        break;
+      case err.TIMEOUT:
+        setError('دریافت موقعیت مکانی زمان‌بر بود. دوباره تلاش کنید.');
+        setStatus('error');
+        break;
+      default:
+        setError('خطای ناشناخته در دریافت موقعیت.');
+        setStatus('error');
+    }
+  };
+
+  // ✅ پاک‌سازی هنگام unmount
+  useEffect(() => {
+    return () => {
+      stopWatching();
+    };
+  }, [stopWatching]);
+
+  return {
+    position,
+    error,
+    status,
+    isSupported: 'geolocation' in navigator,
+    getLocation,
+    startWatching,
+    stopWatching,
+  };
+}
+```
+
+### ۲. کامپوننت دکمه‌ی موقعیت
+
+```jsx
+// components/LocationButton.jsx
+import { useGeolocation } from '@/hooks/useGeolocation';
+
+export function LocationButton({ onLocationFound }) {
+  const { position, error, status, getLocation } = useGeolocation();
+
+  const handleClick = () => {
+    getLocation();
+  };
+
+  // ✅ وقتی موقعیت پیدا شد، به parent اطلاع بده
+  if (position && onLocationFound) {
+    onLocationFound(position);
+  }
+
+  return (
+    <div className="space-y-3">
+      <button
+        onClick={handleClick}
+        disabled={status === 'loading'}
+        className="bg-blue-600 text-white px-6 py-3 rounded-lg 
+                   hover:bg-blue-700 transition-colors font-medium
+                   disabled:bg-gray-400 disabled:cursor-not-allowed
+                   flex items-center gap-2"
+      >
+        {status === 'loading' ? (
+          <>
+            <SpinnerIcon />
+            در حال دریافت موقعیت...
+          </>
+        ) : (
+          <>
+            <LocationIcon />
+            استفاده از موقعیت من
+          </>
+        )}
+      </button>
+
+      {error && (
+        <div role="alert" className="p-3 bg-red-50 border border-red-200 rounded-lg">
+          <p className="text-sm text-red-800">{error}</p>
+        </div>
+      )}
+
+      {position && (
+        <div className="p-3 bg-green-50 border border-green-200 rounded-lg">
+          <p className="text-sm text-green-800">
+            ✅ موقعیت پیدا شد (دقت: {Math.round(position.accuracy)} متر)
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+### ۳. استفاده در نقشه
+
+```jsx
+// components/MapWithLocation.jsx
+import { useState } from 'react';
+import { useGeolocation } from '@/hooks/useGeolocation';
+
+export function MapWithLocation() {
+  const { position, status, getLocation, error } = useGeolocation({
+    enableHighAccuracy: true, // ✅ برای نقشه دقت بالا لازمه
+  });
+  const [mapCenter, setMapCenter] = useState({ lat: 35.6892, lng: 51.3890 }); // تهران پیش‌فرض
+
+  const handleUseMyLocation = () => {
+    getLocation();
+  };
+
+  // ✅ آپدیت مرکز نقشه وقتی موقعیت پیدا شد
+  if (position) {
+    setMapCenter({
+      lat: position.latitude,
+      lng: position.longitude,
+    });
+  }
+
+  return (
+    <div className="space-y-4">
+      <button
+        onClick={handleUseMyLocation}
+        className="bg-blue-600 text-white px-4 py-2 rounded-lg"
+      >
+        📍 موقعیت من
+      </button>
+
+      {/* ✅ نقشه (مثال با Leaflet یا Google Maps) */}
+      <div className="h-96 bg-gray-200 rounded-lg flex items-center justify-center">
+        {position ? (
+          <div className="text-center">
+            <p className="font-medium">موقعیت شما:</p>
+            <p className="text-sm">
+              {position.latitude.toFixed(6)}, {position.longitude.toFixed(6)}
+            </p>
+            {/* اینجا نقشه واقعی رندر میشه */}
+          </div>
+        ) : (
+          <p>روی دکمه بزنید تا موقعیت شما نمایش داده شود</p>
+        )}
+      </div>
+
+      {error && <p className="text-red-600 text-sm">{error}</p>}
+    </div>
+  );
+}
+```
+
+### ۴. ردیابی موقعیت (مثلاً برای اپ تحویل)
+
+```jsx
+// components/DeliveryTracker.jsx
+import { useEffect } from 'react';
+import { useGeolocation } from '@/hooks/useGeolocation';
+
+export function DeliveryTracker() {
+  const { position, startWatching, stopWatching, status } = useGeolocation({
+    enableHighAccuracy: true,
+    maximumAge: 10000, // هر ۱۰ ثانیه آپدیت
+  });
+
+  useEffect(() => {
+    startWatching();
+    return () => stopWatching();
+  }, [startWatching, stopWatching]);
+
+  // ✅ ارسال موقعیت به سرور
+  useEffect(() => {
+    if (position) {
+      fetch('/api/delivery/update-location', {
+        method: 'POST',
+        body: JSON.stringify({
+          lat: position.latitude,
+          lng: position.longitude,
+          timestamp: position.timestamp,
+        }),
+      });
+    }
+  }, [position]);
+
+  return (
+    <div className="p-4 bg-blue-50 rounded-lg">
+      <p className="font-medium">🚚 ردیابی زنده پیک</p>
+      {status === 'loading' && <p>در حال دریافت موقعیت...</p>}
+      {status === 'success' && (
+        <p className="text-sm text-gray-600">
+          موقعیت در حال به‌روزرسانی است...
+        </p>
+      )}
+    </div>
+  );
+}
+```
+
+### ۵. Fallback برای مرورگرهای قدیمی
+
+```jsx
+// components/LocationInput.jsx
+import { useState } from 'react';
+import { LocationButton } from './LocationButton';
+
+export function LocationInput({ onLocationChange }) {
+  const [manualLocation, setManualLocation] = useState('');
+
+  const handleManualSubmit = (e) => {
+    e.preventDefault();
+    // ✅ تبدیل آدرس به مختصات با Geocoding API
+    onLocationChange?.({ address: manualLocation });
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* ✅ Geolocation API */}
+      <LocationButton onLocationFound={onLocationChange} />
+
+      {/* ✅ Fallback: ورودی دستی */}
+      <div className="border-t pt-4">
+        <p className="text-sm text-gray-600 mb-2">یا آدرس را دستی وارد کنید:</p>
+        <form onSubmit={handleManualSubmit} className="flex gap-2">
+          <input
+            type="text"
+            value={manualLocation}
+            onChange={(e) => setManualLocation(e.target.value)}
+            placeholder="تهران، خیابان ولیعصر..."
+            className="flex-1 p-2 border border-gray-300 rounded"
+          />
+          <button
+            type="submit"
+            className="bg-gray-200 px-4 py-2 rounded hover:bg-gray-300"
+          >
+            جستجو
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+```
+
+### ۶. توضیح مجوز به کاربر (قبل از درخواست)
+
+```jsx
+// components/LocationPermission.jsx
+import { useState } from 'react';
+
+export function LocationPermission({ onAllow }) {
+  const [showExplanation, setShowExplanation] = useState(true);
+
+  if (!showExplanation) return null;
+
+  return (
+    <div className="p-6 bg-blue-50 border border-blue-200 rounded-lg space-y-4">
+      <h3 className="font-bold text-lg">دسترسی به موقعیت مکانی</h3>
+      <p className="text-gray-700">
+        برای نمایش رستوران‌های نزدیک شما، نیاز به دسترسی به موقعیت مکانی داریم.
+      </p>
+      <ul className="list-disc list-inside text-sm text-gray-600 space-y-1">
+        <li>موقعیت شما فقط برای این جلسه استفاده می‌شود</li>
+        <li>اطلاعات شما ذخیره یا به اشتراک گذاشته نمی‌شود</li>
+        <li>می‌توانید هر زمان دسترسی را لغو کنید</li>
+      </ul>
+      <div className="flex gap-2">
+        <button
+          onClick={() => {
+            setShowExplanation(false);
+            onAllow?.();
+          }}
+          className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
+        >
+          اجازه می‌دهم
+        </button>
+        <button
+          onClick={() => setShowExplanation(false)}
+          className="bg-gray-200 px-4 py-2 rounded hover:bg-gray-300"
+        >
+          بعداً
+        </button>
+      </div>
+    </div>
+  );
+}
+```
+
+**🔗 ابزار تست**
+
+- **Chrome DevTools** → Sensors → Location (شبیه‌سازی موقعیت).
+- **Console**: `navigator.geolocation.getCurrentPosition(pos => console.log(pos))`.
+- **تست واقعی**: روی موبایل GPS رو روشن کن و تست کن.
+- **تست رد مجوز**: در تنظیمات مرورگر، مجوز موقعیت رو رد کن و ببین fallback کار می‌کنه.
+- **HTTP vs HTTPS**: روی HTTP تست کن؛ باید خطا بده.
+
+**⚠️ چک‌لیست نهایی**
+
+- [ ] سایت روی HTTPS هست؟
+- [ ] قبل از درخواست، به کاربر توضیح دادی چرا موقعیت رو می‌خوای؟
+- [ ] `enableHighAccuracy` فقط وقتی لازمه فعال شده؟
+- [ ] `timeout` و `maximumAge` تنظیم شدن؟
+- [ ] خطای `PERMISSION_DENIED` مدیریت شده؟
+- [ ] Fallback برای کاربرانی که مجوز نمیدن داری؟
+- [ ] `watchPosition` بعد از اتمام کار متوقف میشه؟
+- [ ] در unmount کامپوننت، cleanup انجام میشه؟
+- [ ] در DevTools → Sensors تست کردی؟
+
+> **قانون ۳ ثانیه‌ای:** DevTools → Sensors → Location رو باز کن، یه موقعیت سفارشی (مثل Eiffel Tower: 48.8584, 2.2945) بذار. آیا اپ شما واکنش نشون میده؟ بعد مجوز موقعیت رو در تنظیمات مرورگر رد کن؛ آیا fallback (ورودی دستی) نشون داده میشه؟ اگر نه، یعنی UX خوبی برای کاربرانی که مجوز نمیدن نداری!
