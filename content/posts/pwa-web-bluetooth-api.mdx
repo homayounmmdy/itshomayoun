@@ -1,0 +1,432 @@
+---
+title: "PWA: Web Bluetooth API و ارتباط با دستگاه‌های بلوتوث"
+date: '2026-09-24'
+playlist: 'PWA - برنامه وب پیشرونده'
+tags: ['PWA', 'Web-Bluetooth-API', 'BLE', 'IoT', 'Device-API', 'React', 'GATT']
+description: "چطور با Web Bluetooth API به دستگاه‌های بلوتوث Low Energy (BLE) مثل سنسور ضربان قلب، LED یا دماسنج متصل بشیم و داده بخونیم/بنویسیم."
+enableComment: true
+---
+
+# 📶 PWA: Web Bluetooth API و ارتباط با دستگاه‌های بلوتوث
+
+**💡 مفهوم کلیدی**  
+Web Bluetooth API به سایت اجازه میده **مستقیماً با دستگاه‌های بلوتوث Low Energy (BLE)** مثل سنسور ضربان قلب، دماسنج، LED، قفل هوشمند، و دستگاه‌های IoT ارتباط برقرار کنه. با استفاده از **GATT (Generic Attribute Profile)** می‌تونی services و characteristics دستگاه رو کشف کنی و داده بخونی/بنویسی.
+
+**⚠️ دام رایج**  
+- فراموش کردن `navigator.bluetooth.requestDevice()` (بدون user gesture کار نمی‌کنه!).
+- عدم بررسی پشتیبانی مرورگر (فقط Chrome/Edge!).
+- فراموش کردن HTTPS (Bluetooth API فقط روی HTTPS کار می‌کنه).
+- عدم مدیریت `gattserverdisconnected` event (اگر دستگاه خاموش بشه، اپ کرش می‌کنه).
+- عدم استفاده از `startNotifications` برای داده‌های real-time.
+- عدم cleanup (قطع اتصال بعد از اتمام کار).
+- استفاده از UUID اشتباه برای services/characteristics.
+- عدم ارائه‌ی fallback برای مرورگرهای بدون پشتیبانی.
+
+**📏 وضعیت پشتیبانی مرورگرها**
+
+| مرورگر       | پشتیبانی | محدودیت                                  |
+|--------------|-----------|-------------------------------------------|
+| Chrome       | ✅        | نسخه 56+ + فقط HTTPS + user gesture      |
+| Edge         | ✅        | نسخه 79+                                 |
+| Opera        | ✅        | نسخه 43+                                 |
+| Safari       | ❌        | **پشتیبانی نمیشه**                        |
+| iOS Safari   | ❌        | پشتیبانی نمیشه                            |
+| Firefox      | ❌        | **پشتیبانی نمیشه** (flag لازم)            |
+| دسکتاپ       | ✅        | کامل (فقط Chromium-based)                 |
+
+> ⚠️ **نکته حیاتی**: این API فقط در مرورگرهای **Chromium-based** کار می‌کنه. همیشه fallback بذار!
+
+**🛠️ راه‌حل سریع در کد**
+
+### ۱. هوک React برای مدیریت Web Bluetooth
+
+```jsx
+// hooks/useWebBluetooth.js
+import { useState, useCallback, useRef, useEffect } from 'react';
+
+export function useWebBluetooth() {
+  const [isSupported, setIsSupported] = useState(false);
+  const [device, setDevice] = useState(null);
+  const [server, setServer] = useState(null);
+  const [isConnected, setIsConnected] = useState(false);
+  const [error, setError] = useState(null);
+  const [data, setData] = useState({});
+  
+  const characteristicsRef = useRef({});
+
+  useEffect(() => {
+    setIsSupported('bluetooth' in navigator);
+  }, []);
+
+  // ✅ درخواست اتصال به دستگاه
+  const connect = useCallback(async (filters = []) => {
+    if (!isSupported) {
+      setError('Web Bluetooth API در این مرورگر پشتیبانی نمیشه');
+      return null;
+    }
+
+    try {
+      setError(null);
+
+      // ✅ باز کردن پنجره انتخاب دستگاه (نیاز به user gesture)
+      const selectedDevice = await navigator.bluetooth.requestDevice({
+        filters: filters.length > 0 ? filters : [{ services: ['heart_rate'] }],
+        optionalServices: ['battery_service', 'device_information'],
+      });
+
+      console.log(`✅ انتخاب شد: ${selectedDevice.name}`);
+      setDevice(selectedDevice);
+
+      // ✅ اتصال به GATT server
+      const gattServer = await selectedDevice.gatt.connect();
+      setServer(gattServer);
+      setIsConnected(true);
+
+      // ✅ گوش دادن به قطع اتصال
+      selectedDevice.addEventListener('gattserverdisconnected', () => {
+        console.warn('دستگاه بلوتوث قطع شد');
+        setIsConnected(false);
+        setServer(null);
+      });
+
+      return selectedDevice;
+    } catch (err) {
+      if (err.name === 'NotFoundError') {
+        setError('هیچ دستگاهی انتخاب نشد');
+      } else {
+        setError(err.message);
+      }
+      return null;
+    }
+  }, [isSupported]);
+
+  // ✅ خواندن داده از characteristic
+  const readCharacteristic = useCallback(async (serviceUUID, characteristicUUID) => {
+    if (!server || !isConnected) {
+      setError('دستگاه متصل نیست');
+      return null;
+    }
+
+    try {
+      const service = await server.getPrimaryService(serviceUUID);
+      const characteristic = await service.getCharacteristic(characteristicUUID);
+      const value = await characteristic.readValue();
+      
+      return value;
+    } catch (err) {
+      setError(err.message);
+      return null;
+    }
+  }, [server, isConnected]);
+
+  // ✅ نوشتن داده به characteristic
+  const writeCharacteristic = useCallback(async (serviceUUID, characteristicUUID, value) => {
+    if (!server || !isConnected) {
+      setError('دستگاه متصل نیست');
+      return false;
+    }
+
+    try {
+      const service = await server.getPrimaryService(serviceUUID);
+      const characteristic = await service.getCharacteristic(characteristicUUID);
+      await characteristic.writeValue(value);
+      return true;
+    } catch (err) {
+      setError(err.message);
+      return false;
+    }
+  }, [server, isConnected]);
+
+  // ✅ گوش دادن به تغییرات (notifications)
+  const startNotifications = useCallback(async (serviceUUID, characteristicUUID, callback) => {
+    if (!server || !isConnected) {
+      setError('دستگاه متصل نیست');
+      return null;
+    }
+
+    try {
+      const service = await server.getPrimaryService(serviceUUID);
+      const characteristic = await service.getCharacteristic(characteristicUUID);
+      
+      await characteristic.startNotifications();
+      
+      characteristic.addEventListener('characteristicvaluechanged', (event) => {
+        const value = event.target.value;
+        callback(value);
+        setData((prev) => ({ ...prev, [characteristicUUID]: value }));
+      });
+
+      characteristicsRef.current[characteristicUUID] = characteristic;
+      return characteristic;
+    } catch (err) {
+      setError(err.message);
+      return null;
+    }
+  }, [server, isConnected]);
+
+  // ✅ قطع اتصال
+  const disconnect = useCallback(() => {
+    if (device && device.gatt.connected) {
+      device.gatt.disconnect();
+    }
+    setDevice(null);
+    setServer(null);
+    setIsConnected(false);
+    setData({});
+    characteristicsRef.current = {};
+  }, [device]);
+
+  // ✅ cleanup
+  useEffect(() => {
+    return () => {
+      if (isConnected) {
+        disconnect();
+      }
+    };
+  }, [isConnected, disconnect]);
+
+  return {
+    isSupported,
+    device,
+    isConnected,
+    data,
+    error,
+    connect,
+    disconnect,
+    readCharacteristic,
+    writeCharacteristic,
+    startNotifications,
+  };
+}
+```
+
+### ۲. کامپوننت ضربان قلب (Heart Rate Monitor)
+
+```jsx
+// components/HeartRateMonitor.jsx
+import { useState } from 'react';
+import { useWebBluetooth } from '@/hooks/useWebBluetooth';
+
+export function HeartRateMonitor() {
+  const { isSupported, device, isConnected, error, connect, disconnect, startNotifications } = useWebBluetooth();
+  const [heartRate, setHeartRate] = useState(null);
+
+  const handleConnect = async () => {
+    const selectedDevice = await connect([
+      { services: ['heart_rate'] }, // فیلتر برای دستگاه‌های ضربان قلب
+    ]);
+
+    if (selectedDevice) {
+      // ✅ گوش دادن به تغییرات ضربان قلب
+      await startNotifications(
+        'heart_rate',
+        'heart_rate_measurement',
+        (value) => {
+          // ✅ تفسیر داده (بر اساس استاندارد BLE Heart Rate)
+          const flags = value.getUint8(0);
+          const heartRate = flags & 0x01 
+            ? value.getUint16(1, true) // 16-bit
+            : value.getUint8(1);       // 8-bit
+          
+          setHeartRate(heartRate);
+        }
+      );
+    }
+  };
+
+  if (!isSupported) {
+    return (
+      <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+        <p className="text-sm text-yellow-800">
+          ⚠️ Web Bluetooth API فقط در Chrome و Edge پشتیبانی میشه.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4 max-w-md mx-auto">
+      <div className="flex items-center justify-between">
+        <h2 className="text-xl font-bold">❤️ ضربان قلب</h2>
+        <span className={`px-3 py-1 rounded-full text-xs font-medium ${
+          isConnected ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'
+        }`}>
+          {isConnected ? 'متصل' : 'قطع'}
+        </span>
+      </div>
+
+      {!isConnected ? (
+        <button
+          onClick={handleConnect}
+          className="w-full bg-red-600 text-white px-6 py-4 rounded-lg 
+                     hover:bg-red-700 transition-colors font-medium text-lg
+                     flex items-center justify-center gap-2"
+        >
+          <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
+          </svg>
+          اتصال به سنسور ضربان قلب
+        </button>
+      ) : (
+        <div className="space-y-4">
+          {/* ✅ نمایش ضربان قلب */}
+          <div className="bg-red-50 border-2 border-red-200 rounded-xl p-8 text-center">
+            <p className="text-sm text-red-600 mb-2">ضربان قلب</p>
+            <p className="text-6xl font-bold text-red-700">
+              {heartRate || '--'}
+            </p>
+            <p className="text-sm text-red-600 mt-2">BPM</p>
+          </div>
+
+          {/* ✅ اطلاعات دستگاه */}
+          {device && (
+            <div className="p-4 bg-gray-50 rounded-lg">
+              <p className="text-sm font-medium">دستگاه: {device.name || 'بدون نام'}</p>
+              <p className="text-xs text-gray-600">ID: {device.id}</p>
+            </div>
+          )}
+
+          <button
+            onClick={disconnect}
+            className="w-full bg-gray-600 text-white px-6 py-3 rounded-lg 
+                       hover:bg-gray-700 transition-colors font-medium"
+          >
+            قطع اتصال
+          </button>
+        </div>
+      )}
+
+      {error && (
+        <div role="alert" className="p-3 bg-red-50 border border-red-200 rounded-lg">
+          <p className="text-sm text-red-800">{error}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+### ۳. کنترل LED با بلوتوث
+
+```jsx
+// components/BluetoothLEDControl.jsx
+import { useState } from 'react';
+import { useWebBluetooth } from '@/hooks/useWebBluetooth';
+
+export function BluetoothLEDControl() {
+  const { isSupported, isConnected, error, connect, disconnect, writeCharacteristic } = useWebBluetooth();
+  const [isOn, setIsOn] = useState(false);
+
+  const handleConnect = async () => {
+    await connect([
+      { services: ['0000fff0-0000-1000-8000-00805f9b34fb'] }, // UUID سفارشی
+    ]);
+  };
+
+  const handleToggle = async () => {
+    const newState = !isOn;
+    const value = new Uint8Array([newState ? 1 : 0]);
+    
+    const success = await writeCharacteristic(
+      '0000fff0-0000-1000-8000-00805f9b34fb', // Service UUID
+      '0000fff1-0000-1000-8000-00805f9b34fb', // Characteristic UUID
+      value
+    );
+
+    if (success) {
+      setIsOn(newState);
+    }
+  };
+
+  if (!isSupported) {
+    return (
+      <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+        <p className="text-sm text-yellow-800">
+          ⚠️ Web Bluetooth API پشتیبانی نمیشه.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4 max-w-md mx-auto">
+      <h2 className="text-xl font-bold">💡 کنترل LED</h2>
+
+      {!isConnected ? (
+        <button
+          onClick={handleConnect}
+          className="w-full bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700"
+        >
+          اتصال به دستگاه LED
+        </button>
+      ) : (
+        <div className="space-y-4">
+          <button
+            onClick={handleToggle}
+            className={`w-full px-6 py-4 rounded-lg font-medium text-lg transition-colors ${
+              isOn 
+                ? 'bg-yellow-500 text-white hover:bg-yellow-600' 
+                : 'bg-gray-300 text-gray-700 hover:bg-gray-400'
+            }`}
+          >
+            {isOn ? '💡 خاموش کردن' : '🔅 روشن کردن'}
+          </button>
+
+          <button
+            onClick={disconnect}
+            className="w-full bg-red-600 text-white px-6 py-3 rounded-lg hover:bg-red-700"
+          >
+            قطع اتصال
+          </button>
+        </div>
+      )}
+
+      {error && (
+        <div role="alert" className="p-3 bg-red-50 border border-red-200 rounded-lg">
+          <p className="text-sm text-red-800">{error}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+### ۴. UUID‌های استاندارد BLE
+
+```js
+// ✅ برخی از UUID‌های استاندارد BLE:
+const STANDARD_SERVICES = {
+  heart_rate: '0000180d-0000-1000-8000-00805f9b34fb',
+  battery_service: '0000180f-0000-1000-8000-00805f9b34fb',
+  device_information: '0000180a-0000-1000-8000-00805f9b34fb',
+  health_thermometer: '00001809-0000-1000-8000-00805f9b34fb',
+  blood_pressure: '00001810-0000-1000-8000-00805f9b34fb',
+};
+
+// ✅ می‌تونی از نام کوتاه هم استفاده کنی:
+await server.getPrimaryService('heart_rate'); // به جای UUID کامل
+```
+
+**🔗 ابزار تست**
+
+- **Chrome DevTools** → Application → Bluetooth (مشاهده دستگاه‌های متصل).
+- **Console**: `navigator.bluetooth.getDevices()` برای مشاهده دستگاه‌های اجازه‌داده‌شده.
+- **تست واقعی**: یه دستگاه BLE مثل Polar H10 (ضربان قلب) یا یه ماژول BLE Arduino وصل کن.
+- **nRF Connect** (اپ موبایل): برای اسکن و تست دستگاه‌های BLE.
+- **Web Bluetooth Debugger**: [googlechrome.github.io/samples/web-bluetooth](https://googlechrome.github.io/samples/web-bluetooth/)
+- **Safari/Firefox**: تست کن که fallback درست کار می‌کنه.
+
+**⚠️ چک‌لیست نهایی**
+
+- [ ] سایت روی HTTPS هست؟
+- [ ] بررسی پشتیبانی مرورگر قبل از استفاده؟
+- [ ] استفاده از `requestDevice()` با user gesture؟
+- [ ] مدیریت `gattserverdisconnected` event؟
+- [ ] استفاده از `startNotifications` برای داده‌های real-time؟
+- [ ] cleanup (قطع اتصال) در unmount کامپوننت؟
+- [ ] Fallback برای مرورگرهای بدون پشتیبانی؟
+- [ ] UUID درست برای services و characteristics؟
+- [ ] تست با دستگاه BLE واقعی؟
+- [ ] احترام به حریم خصوصی (توضیح به کاربر)؟
+
+> **قانون ۳ ثانیه‌ای:** سایت رو روی Chrome باز کن، دکمه "اتصال" رو بزن. آیا پنجره انتخاب دستگاه بلوتوث باز میشه؟ بعد یه دستگاه BLE رو انتخاب کن. آیا اتصال برقرار میشه و داده دریافت می‌کنی؟ بعد دستگاه رو خاموش کن؛ آیا اپ به جای کرش کردن، وضعیت رو به "قطع" تغییر میده؟ اگر نه، یعنی `gattserverdisconnected` رو گوش نمی‌دی!
