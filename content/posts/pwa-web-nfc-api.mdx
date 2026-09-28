@@ -1,0 +1,467 @@
+---
+title: "PWA: Web NFC API و ارتباط با تگ‌های NFC"
+date: '2026-09-24'
+playlist: 'PWA - برنامه وب پیشرونده'
+tags: ['PWA', 'Web-NFC-API', 'NFC', 'Device-API', 'IoT', 'React', 'Mobile']
+description: "چطور با Web NFC API تگ‌های NFC رو بخونیم و بنویسیم، کارت‌های هوشمند رو اسکن کنیم و از محدودیت‌های امنیتی این API آگاه باشیم."
+enableComment: true
+---
+
+# 📡 PWA: Web NFC API و ارتباط با تگ‌های NFC
+
+**💡 مفهوم کلیدی**  
+Web NFC API به سایت اجازه میده **تگ‌های NFC** (Near Field Communication) رو بخونه و بنویسه. این یعنی کاربر می‌تونه گوشی رو به یه تگ NFC نزدیک کنه و سایت شما اطلاعات رو بخونه (مثل کارت ویزیت دیجیتال، برچسب محصول، یا کارت هوشمند) یا حتی روی تگ بنویسه.
+
+**⚠️ دام رایج**  
+- فراموش کردن HTTPS (NFC فقط روی HTTPS کار می‌کنه).
+- عدم بررسی پشتیبانی مرورگر (فقط Chrome Android!).
+- شروع خواندن NFC بدون user gesture (مرورگر بلاک می‌کنه).
+- عدم مدیریت خطای `AbortError` (کاربر گوشی رو دور می‌کنه).
+- عدم توقف `NDEFReader` بعد از اتمام کار (leak منابع و مصرف باتری).
+- نوشتن روی تگ بدون اجازه‌ی صریح کاربر.
+- نادیده گرفتن `AbortController` برای لغو عملیات.
+
+**📏 وضعیت پشتیبانی مرورگرها (بسیار محدود!)**
+
+| مرورگر       | پشتیبانی | محدودیت                                  |
+|--------------|-----------|-------------------------------------------|
+| Chrome       | ✅        | **فقط Android 8+** + HTTPS + user gesture |
+| Edge         | ✅        | فقط Android                               |
+| Opera        | ✅        | فقط Android                               |
+| Safari       | ❌        | **پشتیبانی نمیشه**                        |
+| iOS Safari   | ❌        | پشتیبانی نمیشه (با وجود NFC سخت‌افزاری!)  |
+| Firefox      | ❌        | **پشتیبانی نمیشه**                        |
+| دسکتاپ       | ❌        | پشتیبانی نمیشه (حتی با NFC reader)        |
+
+> ⚠️ **نکته حیاتی**: این API فقط در **Chrome Android** کار می‌کنه. حتی iOS با وجود داشتن NFC سخت‌افزاری، این API رو پشتیبانی نمی‌کنه. همیشه fallback بذار!
+
+**🛠️ راه‌حل سریع در کد**
+
+### ۱. هوک React برای مدیریت NFC
+
+```jsx
+// hooks/useNFC.js
+import { useState, useCallback, useRef, useEffect } from 'react';
+
+export function useNFC() {
+  const [isSupported, setIsSupported] = useState(false);
+  const [isReading, setIsReading] = useState(false);
+  const [lastScan, setLastScan] = useState(null);
+  const [error, setError] = useState(null);
+  const abortControllerRef = useRef(null);
+
+  useEffect(() => {
+    setIsSupported('NDEFReader' in window);
+  }, []);
+
+  // ✅ شروع خواندن تگ NFC
+  const startReading = useCallback(async () => {
+    if (!isSupported) {
+      setError('Web NFC در این مرورگر پشتیبانی نمیشه');
+      return;
+    }
+
+    try {
+      setError(null);
+      setIsReading(true);
+
+      // ✅ AbortController برای لغو عملیات
+      abortControllerRef.current = new AbortController();
+
+      const ndef = new NDEFReader();
+      await ndef.scan({ signal: abortControllerRef.current.signal });
+
+      // ✅ وقتی تگ NFC اسکن شد
+      ndef.addEventListener('reading', ({ message, serialNumber }) => {
+        const records = message.records.map((record) => ({
+          recordType: record.recordType,
+          mediaType: record.mediaType,
+          data: record.data ? new TextDecoder().decode(record.data) : null,
+        }));
+
+        setLastScan({
+          serialNumber,
+          records,
+          timestamp: Date.now(),
+        });
+      });
+
+      // ✅ وقتی خطایی رخ بده
+      ndef.addEventListener('readingerror', () => {
+        setError('خطا در خواندن تگ NFC');
+      });
+    } catch (err) {
+      if (err.name === 'AbortError') {
+        // ✅ کاربر عملیات رو لغو کرد
+        setError(null);
+      } else {
+        setError(err.message);
+      }
+      setIsReading(false);
+    }
+  }, [isSupported]);
+
+  // ✅ توقف خواندن
+  const stopReading = useCallback(() => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    setIsReading(false);
+  }, []);
+
+  // ✅ نوشتن روی تگ NFC
+  const writeToTag = useCallback(async (data) => {
+    if (!isSupported) {
+      setError('Web NFC در این مرورگر پشتیبانی نمیشه');
+      return false;
+    }
+
+    try {
+      setError(null);
+      const ndef = new NDEFReader();
+
+      await ndef.write({
+        records: [
+          {
+            recordType: 'text',
+            data: data,
+            lang: 'fa',
+          },
+        ],
+      });
+
+      return true;
+    } catch (err) {
+      if (err.name === 'AbortError') {
+        setError('عملیات نوشتن لغو شد');
+      } else {
+        setError(err.message);
+      }
+      return false;
+    }
+  }, [isSupported]);
+
+  // ✅ نوشتن URL روی تگ
+  const writeUrl = useCallback(async (url) => {
+    if (!isSupported) return false;
+
+    try {
+      const ndef = new NDEFReader();
+      await ndef.write({
+        records: [
+          {
+            recordType: 'url',
+            data: url,
+          },
+        ],
+      });
+      return true;
+    } catch (err) {
+      setError(err.message);
+      return false;
+    }
+  }, [isSupported]);
+
+  // ✅ cleanup
+  useEffect(() => {
+    return () => {
+      stopReading();
+    };
+  }, [stopReading]);
+
+  return {
+    isSupported,
+    isReading,
+    lastScan,
+    error,
+    startReading,
+    stopReading,
+    writeToTag,
+    writeUrl,
+  };
+}
+```
+
+### ۲. کامپوننت اسکنر NFC
+
+```jsx
+// components/NFCScanner.jsx
+import { useNFC } from '@/hooks/useNFC';
+
+export function NFCScanner({ onScan }) {
+  const { isSupported, isReading, lastScan, error, startReading, stopReading } = useNFC();
+
+  if (!isSupported) {
+    return (
+      <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+        <p className="text-sm text-yellow-800">
+          ⚠️ Web NFC فقط در Chrome Android پشتیبانی میشه.
+        </p>
+        <p className="text-xs text-yellow-700 mt-1">
+          لطفاً سایت رو با Chrome روی گوشی اندروید باز کنید.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {!isReading ? (
+        <button
+          onClick={startReading}
+          className="w-full bg-blue-600 text-white px-6 py-4 rounded-lg 
+                     hover:bg-blue-700 transition-colors font-medium
+                     flex items-center justify-center gap-3 text-lg"
+        >
+          <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
+          </svg>
+          اسکن تگ NFC
+        </button>
+      ) : (
+        <div className="space-y-3">
+          {/* ✅ انیمیشن اسکن */}
+          <div className="flex flex-col items-center p-8 bg-blue-50 border-2 border-dashed border-blue-300 rounded-xl">
+            <div className="w-20 h-20 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4" />
+            <p className="font-medium text-blue-800">گوشی رو به تگ NFC نزدیک کنید...</p>
+            <p className="text-sm text-blue-600 mt-1">فاصله کمتر از ۴ سانتی‌متر</p>
+          </div>
+
+          <button
+            onClick={stopReading}
+            className="w-full bg-gray-200 text-gray-800 px-6 py-3 rounded-lg 
+                       hover:bg-gray-300 transition-colors font-medium"
+          >
+            لغو اسکن
+          </button>
+        </div>
+      )}
+
+      {/* ✅ نتیجه اسکن */}
+      {lastScan && (
+        <div className="p-4 bg-green-50 border border-green-200 rounded-lg space-y-2">
+          <p className="font-medium text-green-800">✅ تگ NFC خوانده شد!</p>
+          <p className="text-sm text-gray-600">
+            سریال: <code className="bg-gray-100 px-1 rounded">{lastScan.serialNumber}</code>
+          </p>
+          {lastScan.records.map((record, idx) => (
+            <div key={idx} className="p-2 bg-white rounded border">
+              <p className="text-xs text-gray-500">نوع: {record.recordType}</p>
+              <p className="text-sm font-mono break-all">{record.data}</p>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {error && (
+        <div role="alert" className="p-3 bg-red-50 border border-red-200 rounded-lg">
+          <p className="text-sm text-red-800">{error}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+### ۳. نوشتن روی تگ NFC
+
+```jsx
+// components/NFCWriter.jsx
+import { useState } from 'react';
+import { useNFC } from '@/hooks/useNFC';
+
+export function NFCWriter() {
+  const { isSupported, writeToTag, writeUrl, error } = useNFC();
+  const [text, setText] = useState('');
+  const [url, setUrl] = useState('');
+  const [success, setSuccess] = useState(false);
+
+  const handleWriteText = async () => {
+    if (!text) return;
+    const result = await writeToTag(text);
+    if (result) {
+      setSuccess(true);
+      setTimeout(() => setSuccess(false), 3000);
+    }
+  };
+
+  const handleWriteUrl = async () => {
+    if (!url) return;
+    const result = await writeUrl(url);
+    if (result) {
+      setSuccess(true);
+      setTimeout(() => setSuccess(false), 3000);
+    }
+  };
+
+  if (!isSupported) {
+    return (
+      <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+        <p className="text-sm text-yellow-800">
+          ⚠️ نوشتن NFC فقط در Chrome Android پشتیبانی میشه.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <h3 className="font-bold text-lg">نوشتن روی تگ NFC</h3>
+
+      {/* ✅ نوشتن متن */}
+      <div className="space-y-2">
+        <label htmlFor="nfc-text" className="block text-sm font-medium">متن</label>
+        <input
+          id="nfc-text"
+          type="text"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder="سلام! این یه تگ NFC هست"
+          className="w-full p-3 border border-gray-300 rounded-lg"
+        />
+        <button
+          onClick={handleWriteText}
+          disabled={!text}
+          className="w-full bg-green-600 text-white px-4 py-2 rounded-lg 
+                     hover:bg-green-700 disabled:bg-gray-300"
+        >
+          نوشتن متن روی تگ
+        </button>
+      </div>
+
+      {/* ✅ نوشتن URL */}
+      <div className="space-y-2">
+        <label htmlFor="nfc-url" className="block text-sm font-medium">لینک</label>
+        <input
+          id="nfc-url"
+          type="url"
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+          placeholder="https://example.com"
+          className="w-full p-3 border border-gray-300 rounded-lg"
+        />
+        <button
+          onClick={handleWriteUrl}
+          disabled={!url}
+          className="w-full bg-purple-600 text-white px-4 py-2 rounded-lg 
+                     hover:bg-purple-700 disabled:bg-gray-300"
+        >
+          نوشتن لینک روی تگ
+        </button>
+      </div>
+
+      {success && (
+        <div role="status" className="p-3 bg-green-50 border border-green-200 rounded-lg">
+          <p className="text-sm text-green-800">✅ با موفقیت روی تگ نوشته شد!</p>
+        </div>
+      )}
+
+      {error && (
+        <div role="alert" className="p-3 bg-red-50 border border-red-200 rounded-lg">
+          <p className="text-sm text-red-800">{error}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+### ۴. استفاده‌ی عملی: کارت ویزیت دیجیتال
+
+```jsx
+// components/DigitalBusinessCard.jsx
+import { useNFC } from '@/hooks/useNFC';
+
+export function DigitalBusinessCard() {
+  const { isSupported, writeToTag, error } = useNFC();
+
+  const cardData = {
+    name: 'علی احمدی',
+    title: 'توسعه‌دهنده فرانت‌اند',
+    phone: '+989121234567',
+    email: 'ali@example.com',
+    website: 'https://ali.dev',
+  };
+
+  const handleWriteCard = async () => {
+    const vcard = `BEGIN:VCARD
+VERSION:3.0
+FN:${cardData.name}
+TITLE:${cardData.title}
+TEL:${cardData.phone}
+EMAIL:${cardData.email}
+URL:${cardData.website}
+END:VCARD`;
+
+    const success = await writeToTag(vcard);
+    if (success) {
+      alert('کارت ویزیت روی تگ NFC نوشته شد!');
+    }
+  };
+
+  return (
+    <div className="p-6 bg-gradient-to-br from-blue-600 to-purple-700 text-white rounded-xl space-y-4">
+      <h2 className="text-2xl font-bold">{cardData.name}</h2>
+      <p className="text-blue-200">{cardData.title}</p>
+      <div className="space-y-1 text-sm">
+        <p>📞 {cardData.phone}</p>
+        <p>📧 {cardData.email}</p>
+        <p>🌐 {cardData.website}</p>
+      </div>
+
+      {isSupported && (
+        <button
+          onClick={handleWriteCard}
+          className="w-full bg-white text-blue-700 px-4 py-3 rounded-lg 
+                     font-medium hover:bg-blue-50 transition-colors mt-4"
+        >
+          📡 نوشتن روی تگ NFC
+        </button>
+      )}
+    </div>
+  );
+}
+```
+
+### ۵. انواع رکوردهای NFC
+
+```js
+// ✅ رکورد متنی
+{ recordType: 'text', data: 'سلام دنیا', lang: 'fa' }
+
+// ✅ رکورد URL
+{ recordType: 'url', data: 'https://example.com' }
+
+// ✅ رکورد MIME (داده‌ی دلخواه)
+{ recordType: 'mime', mediaType: 'application/json', data: JSON.stringify({ id: 123 }) }
+
+// ✅ رکورد خالی (پاک کردن تگ)
+{ recordType: 'empty' }
+
+// ✅ رکورد Absolute URL
+{ recordType: 'absolute-url', data: 'https://example.com/nfc' }
+```
+
+**🔗 ابزار تست**
+
+- **Chrome Android**: سایت رو روی گوشی اندروید با Chrome باز کن و یه تگ NFC واقعی رو اسکن کن.
+- **تگ‌های NFC ارزان**: NTAG213 یا NTAG215 از دیجی‌کالا یا آمازون (هر کدوم حدود ۵-۱۰ هزار تومان).
+- **NFC Tools** (اپ اندروید): برای بررسی محتوای تگ‌ها.
+- **DevTools** → Console: `'NDEFReader' in window` برای بررسی پشتیبانی.
+- **Safari/iOS**: تست کن که fallback درست کار می‌کنه.
+
+**⚠️ چک‌لیست نهایی**
+
+- [ ] سایت روی HTTPS هست؟
+- [ ] بررسی پشتیبانی مرورگر قبل از استفاده؟
+- [ ] استفاده از user gesture (کلیک) قبل از `scan()`؟
+- [ ] استفاده از `AbortController` برای لغو عملیات؟
+- [ ] مدیریت `AbortError` (لغو توسط کاربر)؟
+- [ ] توقف `NDEFReader` بعد از اتمام کار؟
+- [ ] Fallback برای مرورگرهای بدون پشتیبانی؟
+- [ ] توضیح به کاربر قبل از نوشتن روی تگ؟
+- [ ] تست با تگ NFC واقعی؟
+- [ ] cleanup در unmount کامپوننت؟
+
+> **قانون ۳ ثانیه‌ای:** سایت رو روی Chrome Android باز کن، دکمه "اسکن NFC" رو بزن. آیا مرورگر اجازه‌ی دسترسی به NFC رو می‌خواد؟ بعد یه تگ NFC رو به پشت گوشی نزدیک کن. آیا اطلاعات تگ نشون داده میشه؟ بعد Safari رو باز کن؛ آیا پیام "پشتیبانی نمیشه" نشون داده میشه؟ اگر نه، یعنی API رو درست پیاده‌سازی نکردی!
