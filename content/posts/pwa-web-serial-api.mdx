@@ -1,0 +1,382 @@
+---
+title: "PWA: Web Serial API و ارتباط با دستگاه‌های سریال"
+date: '2026-09-24'
+playlist: 'PWA - برنامه وب پیشرونده'
+tags: ['PWA', 'Web-Serial-API', 'IoT', 'Arduino', 'Device-API', 'USB', 'React']
+description: "چطور با Web Serial API مستقیماً با دستگاه‌های سریال (مثل آردوینو، پرینتر سه‌بعدی یا اسکنر بارکد) از طریق مرورگر ارتباط برقرار کنیم و داده بخونیم/بنویسیم."
+enableComment: true
+---
+
+# 🔌 PWA: Web Serial API و ارتباط با دستگاه‌های سریال
+
+**💡 مفهوم کلیدی**  
+Web Serial API به وب‌اپلیکیشن‌ها اجازه میده **مستقیماً با دستگاه‌های سخت‌افزاری سریال** (مثل Arduino، Raspberry Pi، پرینترهای سه‌بعدی، اسکنرهای بارکد و تجهیزات صنعتی) از طریق پورت USB یا بلوتوث سریال ارتباط برقرار کنن. این یعنی می‌تونی داشبوردهای کنترل IoT، ابزارهای کالیبراسیون یا رابط‌های برنامه‌نویسی میکروکنترلر رو کاملاً تحت وب بسازی.
+
+**⚠️ دام رایج**  
+- فراموش کردن `navigator.serial.requestPort()` (مرورگر بدون تعامل کاربر اجازه اتصال نمیده!).
+- عدم مدیریت رویداد `disconnect` (اگر کاربر کابل USB رو بکشه، اپ کرش می‌کنه).
+- باز گذاشتن پورت بعد از اتمام کار (باعث Memory Leak و قفل شدن پورت میشه).
+- عدم استفاده از `TextDecoder` و `TextEncoder` برای تبدیل داده‌های باینری به رشته.
+- فراموش کردن HTTPS (Serial API فقط روی HTTPS کار می‌کنه).
+- عدم ارائه‌ی fallback برای مرورگرهای بدون پشتیبانی (مثل Safari و Firefox).
+- نادیده گرفتن Baud Rate اشتباه (باعث دریافت داده‌های نامفهوم میشه).
+
+**📏 وضعیت پشتیبانی مرورگرها**
+
+| مرورگر       | پشتیبانی | محدودیت                                  |
+|--------------|-----------|-------------------------------------------|
+| Chrome       | ✅        | نسخه 89+ + فقط HTTPS + نیاز به user gesture |
+| Edge         | ✅        | نسخه 89+                                 |
+| Opera        | ✅        | نسخه 75+                                 |
+| Safari       | ❌        | **پشتیبانی نمیشه**                        |
+| iOS Safari   | ❌        | پشتیبانی نمیشه                            |
+| Firefox      | ❌        | **پشتیبانی نمیشه** (در حال بررسی)         |
+| دسکتاپ       | ✅        | کامل (فقط Chromium-based)                 |
+
+> ⚠️ **نکته حیاتی**: این API فقط در مرورگرهای **Chromium-based** کار می‌کنه. همیشه fallback بذار!
+
+**🛠️ راه‌حل سریع در کد**
+
+### ۱. هوک React برای مدیریت Web Serial
+
+```jsx
+// hooks/useWebSerial.js
+import { useState, useCallback, useRef, useEffect } from 'react';
+
+export function useWebSerial() {
+  const [isSupported, setIsSupported] = useState(false);
+  const [port, setPort] = useState(null);
+  const [isConnected, setIsConnected] = useState(false);
+  const [lastMessage, setLastMessage] = useState('');
+  const [error, setError] = useState(null);
+  
+  const readerRef = useRef(null);
+  const writerRef = useRef(null);
+  const keepReadingRef = useRef(false);
+
+  useEffect(() => {
+    setIsSupported('serial' in navigator);
+  }, []);
+
+  // ✅ درخواست اتصال به دستگاه
+  const connect = useCallback(async () => {
+    if (!isSupported) {
+      setError('Web Serial API در این مرورگر پشتیبانی نمیشه');
+      return null;
+    }
+
+    try {
+      setError(null);
+      // ✅ باز کردن پنجره انتخاب پورت (نیاز به user gesture داره)
+      const selectedPort = await navigator.serial.requestPort();
+      
+      // ✅ باز کردن پورت با Baud Rate مشخص (مثلاً 9600 برای آردوینو)
+      await selectedPort.open({ baudRate: 9600 });
+      
+      setPort(selectedPort);
+      setIsConnected(true);
+      keepReadingRef.current = true;
+
+      // ✅ شروع خواندن داده‌ها
+      readLoop(selectedPort);
+
+      return selectedPort;
+    } catch (err) {
+      if (err.name === 'NotFoundError') {
+        setError('هیچ دستگاه سریالی انتخاب نشد');
+      } else {
+        setError(err.message);
+      }
+      return null;
+    }
+  }, [isSupported]);
+
+  // ✅ حلقه‌ی خواندن داده‌ها
+  const readLoop = useCallback(async (currentPort) => {
+    const textDecoder = new TextDecoderStream();
+    const readableStreamClosed = currentPort.readable.pipeTo(textDecoder.writable);
+    const reader = textDecoder.readable.getReader();
+    readerRef.current = reader;
+
+    try {
+      while (keepReadingRef.current) {
+        const { value, done } = await reader.read();
+        if (done) {
+          break;
+        }
+        if (value) {
+          setLastMessage((prev) => prev + value);
+        }
+      }
+    } catch (err) {
+      console.error('خطا در خواندن:', err);
+    } finally {
+      reader.releaseLock();
+    }
+  }, []);
+
+  // ✅ ارسال داده به دستگاه
+  const writeData = useCallback(async (data) => {
+    if (!port || !port.writable) {
+      setError('پورت متصل نیست یا قابل نوشتن نیست');
+      return false;
+    }
+
+    try {
+      const textEncoder = new TextEncoderStream();
+      const writableStreamClosed = textEncoder.readable.pipeTo(port.writable);
+      const writer = textEncoder.writable.getWriter();
+      writerRef.current = writer;
+
+      await writer.write(data + '\n'); // اضافه کردن newline برای آردوینو
+      writer.releaseLock();
+      return true;
+    } catch (err) {
+      setError(err.message);
+      return false;
+    }
+  }, [port]);
+
+  // ✅ قطع اتصال
+  const disconnect = useCallback(async () => {
+    keepReadingRef.current = false;
+    
+    if (readerRef.current) {
+      await readerRef.current.cancel();
+      readerRef.current = null;
+    }
+    
+    if (port) {
+      await port.close();
+      setPort(null);
+    }
+    
+    setIsConnected(false);
+    setLastMessage('');
+  }, [port]);
+
+  // ✅ گوش دادن به قطع شدن دستگاه
+  useEffect(() => {
+    if (!isSupported) return;
+
+    const handleDisconnect = (event) => {
+      if (event.target === port) {
+        console.warn('دستگاه سریال قطع شد');
+        disconnect();
+      }
+    };
+
+    navigator.serial.addEventListener('disconnect', handleDisconnect);
+    return () => {
+      navigator.serial.removeEventListener('disconnect', handleDisconnect);
+    };
+  }, [isSupported, port, disconnect]);
+
+  // ✅ cleanup هنگام unmount
+  useEffect(() => {
+    return () => {
+      if (isConnected) {
+        disconnect();
+      }
+    };
+  }, [isConnected, disconnect]);
+
+  return {
+    isSupported,
+    isConnected,
+    lastMessage,
+    error,
+    connect,
+    writeData,
+    disconnect,
+  };
+}
+```
+
+### ۲. کامپوننت ترمینال سریال
+
+```jsx
+// components/SerialTerminal.jsx
+import { useState } from 'react';
+import { useWebSerial } from '@/hooks/useWebSerial';
+
+export function SerialTerminal() {
+  const { isSupported, isConnected, lastMessage, error, connect, writeData, disconnect } = useWebSerial();
+  const [inputText, setInputText] = useState('');
+
+  const handleSend = async (e) => {
+    e.preventDefault();
+    if (!inputText.trim()) return;
+
+    const success = await writeData(inputText);
+    if (success) {
+      setInputText(''); // پاک کردن ورودی بعد از ارسال موفق
+    }
+  };
+
+  if (!isSupported) {
+    return (
+      <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+        <p className="text-sm text-yellow-800">
+          ⚠️ Web Serial API فقط در Chrome و Edge پشتیبانی میشه.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4 max-w-2xl mx-auto">
+      <div className="flex items-center justify-between">
+        <h2 className="text-xl font-bold">🔌 ترمینال سریال</h2>
+        <span className={`px-3 py-1 rounded-full text-xs font-medium ${
+          isConnected ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'
+        }`}>
+          {isConnected ? 'متصل' : 'قطع'}
+        </span>
+      </div>
+
+      {!isConnected ? (
+        <button
+          onClick={connect}
+          className="w-full bg-blue-600 text-white px-6 py-3 rounded-lg 
+                     hover:bg-blue-700 transition-colors font-medium
+                     flex items-center justify-center gap-2"
+        >
+          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+          </svg>
+          اتصال به دستگاه سریال
+        </button>
+      ) : (
+        <div className="space-y-4">
+          {/* ✅ نمایش داده‌های دریافتی */}
+          <div className="bg-gray-900 text-green-400 p-4 rounded-lg font-mono text-sm h-64 overflow-y-auto whitespace-pre-wrap">
+            {lastMessage || 'منتظر دریافت داده...'}
+          </div>
+
+          {/* ✅ فرم ارسال داده */}
+          <form onSubmit={handleSend} className="flex gap-2">
+            <input
+              type="text"
+              value={inputText}
+              onChange={(e) => setInputText(e.target.value)}
+              placeholder="دستور را وارد کنید (مثلاً: LED_ON)"
+              className="flex-1 p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+            />
+            <button
+              type="submit"
+              className="bg-green-600 text-white px-6 py-3 rounded-lg hover:bg-green-700 font-medium"
+            >
+              ارسال
+            </button>
+          </form>
+
+          <button
+            onClick={disconnect}
+            className="w-full bg-red-600 text-white px-6 py-3 rounded-lg 
+                       hover:bg-red-700 transition-colors font-medium"
+          >
+            قطع اتصال
+          </button>
+        </div>
+      )}
+
+      {error && (
+        <div role="alert" className="p-3 bg-red-50 border border-red-200 rounded-lg">
+          <p className="text-sm text-red-800">{error}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+### ۳. Fallback برای مرورگرهای بدون پشتیبانی
+
+```jsx
+// components/SerialConnectorWithFallback.jsx
+import { SerialTerminal } from './SerialTerminal';
+
+export function SerialConnectorWithFallback() {
+  const isSupported = 'serial' in navigator;
+
+  if (!isSupported) {
+    return (
+      <div className="space-y-4">
+        <div className="p-6 bg-yellow-50 border border-yellow-200 rounded-lg text-center">
+          <h3 className="text-lg font-bold text-yellow-800 mb-2">مرورگر پشتیبانی نمیشه</h3>
+          <p className="text-sm text-yellow-700 mb-4">
+            برای ارتباط با دستگاه‌های سریال، لطفاً از <strong>Google Chrome</strong> یا <strong>Microsoft Edge</strong> روی دسکتاپ یا اندروید استفاده کنید.
+          </p>
+          <a 
+            href="https://www.google.com/chrome/" 
+            target="_blank" 
+            rel="noopener noreferrer"
+            className="inline-block bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
+          >
+            دانلود Chrome
+          </a>
+        </div>
+        
+        {/* ✅ اینجا می‌تونی یه رابط جایگزین (مثلاً اتصال به یه سرور واسط) نشون بدی */}
+        <div className="p-4 bg-gray-50 rounded-lg border border-gray-200">
+          <p className="text-sm text-gray-600">
+            💡 راه‌حل جایگزین: از یک سرور واسط (مثل Node.js با پکیج `serialport`) استفاده کنید و از طریق WebSocket با آن ارتباط برقرار کنید.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  return <SerialTerminal />;
+}
+```
+
+### ۴. نمونه کد آردوینو (برای تست)
+
+```cpp
+// ✅ کد ساده برای آردوینو جهت تست Web Serial API
+void setup() {
+  Serial.begin(9600); // باید با baudRate در جاوااسکریپت یکی باشه
+  pinMode(LED_BUILTIN, OUTPUT);
+}
+
+void loop() {
+  if (Serial.available() > 0) {
+    String command = Serial.readStringUntil('\n');
+    command.trim();
+    
+    if (command == "LED_ON") {
+      digitalWrite(LED_BUILTIN, HIGH);
+      Serial.println("LED is now ON");
+    } else if (command == "LED_OFF") {
+      digitalWrite(LED_BUILTIN, LOW);
+      Serial.println("LED is now OFF");
+    } else {
+      Serial.println("Unknown command: " + command);
+    }
+  }
+}
+```
+
+**🔗 ابزار تست**
+
+- **Chrome DevTools** → Application → Serial (مشاهده پورت‌های اجازه‌داده‌شده).
+- **Console**: `navigator.serial.getPorts()` برای مشاهده پورت‌های متصل.
+- **تست واقعی**: یه برد Arduino یا ESP32 با کابل USB وصل کن و تست کن.
+- **Loopback Adapter**: اگه دستگاه سخت‌افزاری نداری، از مبدل USB-to-Serial Loopback استفاده کن (پین TX رو به RX وصل کن تا هر چی می‌فرستی، برگردد).
+- **Safari/Firefox**: تست کن که fallback درست کار می‌کنه.
+
+**⚠️ چک‌لیست نهایی**
+
+- [ ] سایت روی HTTPS هست؟
+- [ ] بررسی پشتیبانی مرورگر قبل از استفاده؟
+- [ ] استفاده از `requestPort()` فقط در response به user gesture؟
+- [ ] مدیریت رویداد `disconnect` برای جلوگیری از کرش؟
+- [ ] استفاده از `TextDecoder` و `TextEncoder` برای داده‌ها؟
+- [ ] بستن پورت (`port.close()`) در cleanup کامپوننت؟
+- [ ] Fallback واضح برای مرورگرهای بدون پشتیبانی؟
+- [ ] تطابق `baudRate` با تنظیمات دستگاه سخت‌افزاری؟
+- [ ] تست با دستگاه واقعی (آردوینو/اسکنر)؟
+
+> **قانون ۳ ثانیه‌ای:** سایت رو روی Chrome باز کن، دکمه "اتصال" رو بزن. آیا پنجره انتخاب پورت COM/USB باز میشه؟ بعد دستگاه رو وصل کن و یه دستور بفرست. آیا پاسخ دریافت می‌کنی؟ بعد کابل USB رو یهو بکش؛ آیا اپ به جای کرش کردن، وضعیت رو به "قطع" تغییر میده و خطای مناسب نشون میده؟ اگر نه، یعنی مدیریت `disconnect` رو فراموش کردی!
