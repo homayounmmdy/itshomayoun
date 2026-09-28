@@ -1,0 +1,490 @@
+---
+title: "PWA: WebGPU و پردازش گرافیکی پیشرفته"
+date: '2026-09-24'
+playlist: 'PWA - برنامه وب پیشرونده'
+tags: ['PWA', 'WebGPU', 'GPU', 'Graphics', 'Compute', 'WGSL', 'React', 'Performance']
+description: "چطور با WebGPU به GPU دسترسی مستقیم داشته باشیم، render pipeline بسازیم و محاسبات موازی روی GPU انجام بدیم (جایگزین مدرن WebGL)."
+enableComment: true
+---
+
+# 🎨 PWA: WebGPU و پردازش گرافیکی پیشرفته
+
+**💡 مفهوم کلیدی**  
+WebGPU یه API **مدرن و سطح پایین** برای دسترسی مستقیم به GPU هست. برخلاف WebGL که قدیمی و پیچیده‌ست، WebGPU **ساده‌تر، سریع‌تر و ایمن‌تره** و از معماری مدرن GPU (مثل Vulkan, Metal, DirectX 12) الهام گرفته. برای بازی‌ها، AI inference، پردازش تصویر و شبیه‌سازی‌های سنگین فوق‌العاده‌ست.
+
+**⚠️ دام رایج**  
+- فراموش کردن بررسی پشتیبانی (`navigator.gpu` وجود نداره در بعضی مرورگرها).
+- عدم مدیریت `adapter.requestDevice()` و خطاهای آن.
+- عدم release کردن resourceها (memory leak).
+- استفاده از shader اشتباه (WGSL syntax).
+- عدم fallback به WebGL برای مرورگرهای قدیمی.
+- عدم بررسی limits و features دستگاه.
+- فراموش کردن `device.destroy()` در cleanup.
+
+**📏 وضعیت پشتیبانی مرورگرها**
+
+| مرورگر       | پشتیبانی | وضعیت                                  |
+|--------------|-----------|-----------------------------------------|
+| Chrome       | ✅        | نسخه 113+ (stable)                     |
+| Edge         | ✅        | نسخه 113+                              |
+| Firefox      | 🚧        | در حال توسعه (flag لازم)               |
+| Safari       | 🚧        | در حال توسعه (WebKit Technology Preview)|
+| iOS Safari   | ❌        | پشتیبانی نمیشه                         |
+| Samsung      | ✅        | نسخه 113+                              |
+
+> ⚠️ **نکته حیاتی**: WebGPU هنوز در همه مرورگرها stable نیست. همیشه fallback به WebGL یا پیام "پشتیبانی نمیشه" بذار!
+
+**🛠️ راه‌حل سریع در کد**
+
+### ۱. هوک React برای مدیریت WebGPU
+
+```jsx
+// hooks/useWebGPU.js
+import { useState, useEffect, useCallback, useRef } from 'react';
+
+export function useWebGPU() {
+  const [isSupported, setIsSupported] = useState(false);
+  const [device, setDevice] = useState(null);
+  const [context, setContext] = useState(null);
+  const [error, setError] = useState(null);
+  const canvasRef = useRef(null);
+
+  useEffect(() => {
+    setIsSupported('gpu' in navigator);
+  }, []);
+
+  // ✅ مقداردهی اولیه WebGPU
+  const init = useCallback(async (canvas) => {
+    if (!isSupported) {
+      setError('WebGPU در این مرورگر پشتیبانی نمیشه');
+      return false;
+    }
+
+    try {
+      setError(null);
+      canvasRef.current = canvas;
+
+      // ✅ درخواست adapter (GPU)
+      const adapter = await navigator.gpu.requestAdapter({
+        powerPreference: 'high-performance',
+      });
+
+      if (!adapter) {
+        setError('هیچ GPU adapter ای پیدا نشد');
+        return false;
+      }
+
+      // ✅ درخواست device
+      const gpuDevice = await adapter.requestDevice({
+        requiredFeatures: [],
+        requiredLimits: {
+          maxBufferSize: 256 * 1024 * 1024, // 256MB
+        },
+      });
+
+      // ✅ تنظیم context برای canvas
+      const gpuContext = canvas.getContext('webgpu');
+      const format = navigator.gpu.getPreferredCanvasFormat();
+
+      gpuContext.configure({
+        device: gpuDevice,
+        format: format,
+        alphaMode: 'premultiplied',
+      });
+
+      setDevice(gpuDevice);
+      setContext(gpuContext);
+
+      console.log('✅ WebGPU initialized', {
+        device: gpuDevice,
+        format,
+        limits: gpuDevice.limits,
+      });
+
+      return true;
+    } catch (err) {
+      setError(err.message);
+      return false;
+    }
+  }, [isSupported]);
+
+  // ✅ cleanup
+  useEffect(() => {
+    return () => {
+      if (device) {
+        device.destroy();
+      }
+    };
+  }, [device]);
+
+  return {
+    isSupported,
+    device,
+    context,
+    error,
+    init,
+  };
+}
+```
+
+### ۲. رندر مثلث ساده
+
+```jsx
+// components/TriangleRenderer.jsx
+import { useEffect, useRef } from 'react';
+import { useWebGPU } from '@/hooks/useWebGPU';
+
+export function TriangleRenderer() {
+  const canvasRef = useRef(null);
+  const { isSupported, device, context, error, init } = useWebGPU();
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    init(canvas).then((success) => {
+      if (!success) return;
+    });
+  }, [init]);
+
+  useEffect(() => {
+    if (!device || !context) return;
+
+    const canvas = canvasRef.current;
+    const format = navigator.gpu.getPreferredCanvasFormat();
+
+    // ✅ Shader با WGSL
+    const shaderCode = `
+      @vertex
+      fn vertexMain(@builtin(vertex_index) VertexIndex: u32) -> @builtin(position) vec4<f32> {
+        var pos = array<vec2<f32>, 3>(
+          vec2<f32>(0.0, 0.5),
+          vec2<f32>(-0.5, -0.5),
+          vec2<f32>(0.5, -0.5)
+        );
+        return vec4<f32>(pos[VertexIndex], 0.0, 1.0);
+      }
+
+      @fragment
+      fn fragmentMain() -> @location(0) vec4<f32> {
+        return vec4<f32>(1.0, 0.0, 0.0, 1.0); // قرمز
+      }
+    `;
+
+    // ✅ ساخت shader module
+    const shaderModule = device.createShaderModule({
+      code: shaderCode,
+    });
+
+    // ✅ ساخت pipeline
+    const pipeline = device.createRenderPipeline({
+      layout: 'auto',
+      vertex: {
+        module: shaderModule,
+        entryPoint: 'vertexMain',
+      },
+      fragment: {
+        module: shaderModule,
+        entryPoint: 'fragmentMain',
+        targets: [{ format }],
+      },
+      primitive: {
+        topology: 'triangle-list',
+      },
+    });
+
+    // ✅ رندر
+    const render = () => {
+      const commandEncoder = device.createCommandEncoder();
+      const textureView = context.getCurrentTexture().createView();
+
+      const renderPass = commandEncoder.beginRenderPass({
+        colorAttachments: [
+          {
+            view: textureView,
+            clearValue: { r: 0.1, g: 0.1, b: 0.2, a: 1.0 },
+            loadOp: 'clear',
+            storeOp: 'store',
+          },
+        ],
+      });
+
+      renderPass.setPipeline(pipeline);
+      renderPass.draw(3); // 3 vertex برای مثلث
+      renderPass.end();
+
+      device.queue.submit([commandEncoder.finish()]);
+      requestAnimationFrame(render);
+    };
+
+    render();
+  }, [device, context]);
+
+  if (!isSupported) {
+    return (
+      <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+        <p className="text-sm text-yellow-800">
+          ⚠️ WebGPU در این مرورگر پشتیبانی نمیشه. لطفاً از Chrome یا Edge استفاده کنید.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <canvas
+        ref={canvasRef}
+        width={512}
+        height={512}
+        className="border border-gray-300 rounded-lg"
+      />
+      {error && (
+        <div role="alert" className="p-3 bg-red-50 border border-red-200 rounded-lg">
+          <p className="text-sm text-red-800">{error}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+### ۳. محاسبات موازی (Compute Shader)
+
+```jsx
+// hooks/useGPUCompute.js
+import { useState, useCallback } from 'react';
+import { useWebGPU } from './useWebGPU';
+
+export function useGPUCompute() {
+  const { device, isSupported } = useWebGPU();
+  const [result, setResult] = useState(null);
+
+  // ✅ محاسبه مجموع آرایه بزرگ روی GPU
+  const computeSum = useCallback(async (data) => {
+    if (!device || !isSupported) return null;
+
+    try {
+      // ✅ ساخت buffer برای داده‌های ورودی
+      const inputBuffer = device.createBuffer({
+        size: data.length * 4, // 4 bytes per float32
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+      });
+
+      device.queue.writeBuffer(inputBuffer, 0, data);
+
+      // ✅ ساخت buffer برای نتیجه
+      const outputBuffer = device.createBuffer({
+        size: 4, // فقط یک عدد
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+      });
+
+      // ✅ buffer برای خواندن نتیجه
+      const readBuffer = device.createBuffer({
+        size: 4,
+        usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+      });
+
+      // ✅ Compute Shader
+      const shaderCode = `
+        @group(0) @binding(0) var<storage, read> input: array<f32>;
+        @group(0) @binding(1) var<storage, read_write> output: array<f32>;
+
+        @compute @workgroup_size(64)
+        fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+          let index = id.x;
+          if (index < arrayLength(&input)) {
+            atomicAdd(&output[0], u32(input[index]));
+          }
+        }
+      `;
+
+      const shaderModule = device.createShaderModule({ code: shaderCode });
+
+      const pipeline = device.createComputePipeline({
+        layout: 'auto',
+        compute: {
+          module: shaderModule,
+          entryPoint: 'main',
+        },
+      });
+
+      const bindGroup = device.createBindGroup({
+        layout: pipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: inputBuffer } },
+          { binding: 1, resource: { buffer: outputBuffer } },
+        ],
+      });
+
+      const commandEncoder = device.createCommandEncoder();
+      const passEncoder = commandEncoder.beginComputePass();
+      passEncoder.setPipeline(pipeline);
+      passEncoder.setBindGroup(0, bindGroup);
+      passEncoder.dispatchWorkgroups(Math.ceil(data.length / 64));
+      passEncoder.end();
+
+      commandEncoder.copyBufferToBuffer(outputBuffer, 0, readBuffer, 0, 4);
+      device.queue.submit([commandEncoder.finish()]);
+
+      // ✅ خواندن نتیجه
+      await readBuffer.mapAsync(GPUMapMode.READ);
+      const resultData = new Uint32Array(readBuffer.getMappedRange());
+      setResult(resultData[0]);
+
+      // ✅ cleanup
+      inputBuffer.destroy();
+      outputBuffer.destroy();
+      readBuffer.destroy();
+
+      return resultData[0];
+    } catch (err) {
+      console.error('Compute error:', err);
+      return null;
+    }
+  }, [device, isSupported]);
+
+  return { result, computeSum };
+}
+```
+
+### ۴. استفاده عملی: پردازش تصویر
+
+```jsx
+// components/ImageProcessor.jsx
+import { useState, useRef, useEffect } from 'react';
+import { useWebGPU } from '@/hooks/useWebGPU';
+
+export function ImageProcessor() {
+  const canvasRef = useRef(null);
+  const [imageUrl, setImageUrl] = useState('');
+  const { device, context, isSupported, init } = useWebGPU();
+
+  useEffect(() => {
+    if (canvasRef.current) {
+      init(canvasRef.current);
+    }
+  }, [init]);
+
+  useEffect(() => {
+    if (!device || !context || !imageUrl) return;
+
+    const processImage = async () => {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.src = imageUrl;
+      await img.decode();
+
+      const canvas = canvasRef.current;
+      canvas.width = img.width;
+      canvas.height = img.height;
+
+      // ✅ تبدیل تصویر به texture
+      const texture = device.createTexture({
+        size: { width: img.width, height: img.height },
+        format: 'rgba8unorm',
+        usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+      });
+
+      device.queue.copyExternalImageToTexture(
+        { source: img },
+        { texture },
+        { width: img.width, height: img.height }
+      );
+
+      // ✅ Shader برای grayscale
+      const shaderCode = `
+        @group(0) @binding(0) var inputTexture: texture_2d<f32>;
+        @group(0) @binding(1) var inputSampler: sampler;
+
+        @vertex
+        fn vertexMain(@builtin(vertex_index) idx: u32) -> @builtin(position) vec4<f32> {
+          var pos = array<vec2<f32>, 6>(
+            vec2<f32>(-1.0, -1.0),
+            vec2<f32>(1.0, -1.0),
+            vec2<f32>(-1.0, 1.0),
+            vec2<f32>(-1.0, 1.0),
+            vec2<f32>(1.0, -1.0),
+            vec2<f32>(1.0, 1.0)
+          );
+          return vec4<f32>(pos[idx], 0.0, 1.0);
+        }
+
+        @fragment
+        fn fragmentMain(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
+          let color = textureSample(inputTexture, inputSampler, pos.xy / vec2<f32>(1920.0, 1080.0));
+          let gray = dot(color.rgb, vec3<f32>(0.299, 0.587, 0.114));
+          return vec4<f32>(gray, gray, gray, 1.0);
+        }
+      `;
+
+      // ... ادامه pipeline و render
+    };
+
+    processImage();
+  }, [device, context, imageUrl]);
+
+  return (
+    <div className="space-y-4">
+      <input
+        type="text"
+        value={imageUrl}
+        onChange={(e) => setImageUrl(e.target.value)}
+        placeholder="URL تصویر"
+        className="w-full p-3 border border-gray-300 rounded-lg"
+      />
+      <canvas ref={canvasRef} className="border border-gray-300 rounded-lg max-w-full" />
+    </div>
+  );
+}
+```
+
+### ۵. Fallback به WebGL
+
+```jsx
+// components/GPURenderer.jsx
+import { TriangleRenderer } from './TriangleRenderer';
+import { WebGLTriangle } from './WebGLTriangle';
+
+export function GPURenderer() {
+  const isWebGPUSupported = 'gpu' in navigator;
+
+  if (!isWebGPUSupported) {
+    return (
+      <div className="space-y-4">
+        <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+          <p className="text-sm text-yellow-800">
+            ⚠️ WebGPU پشتیبانی نمیشه. از WebGL استفاده می‌کنیم.
+          </p>
+        </div>
+        <WebGLTriangle />
+      </div>
+    );
+  }
+
+  return <TriangleRenderer />;
+}
+```
+
+**🔗 ابزار تست**
+
+- **Chrome DevTools** → Application → WebGPU (مشاهده device و resources).
+- **Chrome** → `chrome://gpu` → بررسی وضعیت WebGPU.
+- **Console**: `navigator.gpu` باید وجود داشته باشه.
+- **WebGPU CTS**: [webgpu.github.io/cts](https://webgpu.github.io/cts) → تست جامع WebGPU.
+- **WGSL Playground**: [tint.dev](https://tint.dev) → تست shader آنلاین.
+- **تست واقعی**: روی Chrome 113+ تست کن.
+
+**⚠️ چک‌لیست نهایی**
+
+- [ ] بررسی پشتیبانی (`navigator.gpu`) قبل از استفاده؟
+- [ ] مدیریت خطای `requestAdapter()` و `requestDevice()`؟
+- [ ] استفاده از `powerPreference: 'high-performance'`؟
+- [ ] release کردن buffer و texture بعد از استفاده؟
+- [ ] `device.destroy()` در cleanup؟
+- [ ] Fallback به WebGL برای مرورگرهای قدیمی؟
+- [ ] بررسی limits و features دستگاه؟
+- [ ] استفاده از WGSL syntax درست؟
+- [ ] تست در Chrome 113+ واقعی؟
+- [ ] مدیریت memory leak؟
+
+> **قانون ۳ ثانیه‌ای:** Console رو باز کن و بنویس `navigator.gpu`. اگه `undefined` بود، یعنی WebGPU پشتیبانی نمیشه. بعد Chrome رو آپدیت کن (نسخه 113+) و دوباره تست کن. اگه `GPU` object دیدی، یعنی پشتیبانی میشه! بعد یه مثلث ساده رندر کن؛ اگه خطا داد، shader یا pipeline مشکل داره.
