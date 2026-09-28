@@ -1,0 +1,597 @@
+---
+title: "PWA: MediaDevices API و انتخاب میکروفون/دوربین"
+date: '2026-09-28'
+playlist: 'PWA - برنامه وب پیشرونده'
+tags: ['PWA', 'MediaDevices-API', 'WebRTC', 'getUserMedia', 'Camera', 'Microphone', 'React', 'Device-API']
+description: "چطور با MediaDevices API لیست دوربین‌ها و میکروفون‌ها رو بگیریم، دستگاه خاص رو انتخاب کنیم و استریم ویدیو/صدا رو مدیریت کنیم."
+enableComment: true
+---
+
+# 🎥 PWA: MediaDevices API و انتخاب میکروفون/دوربین
+
+**💡 مفهوم کلیدی**  
+MediaDevices API به سایت اجازه میده **لیست تمام دستگاه‌های ورودی/خروجی** (دوربین‌ها، میکروفون‌ها، بلندگوها) رو بگیره و **دستگاه خاص** رو انتخاب کنه. برای اپ‌های تماس تصویری، ضبط ویدیو، کنفرانس آنلاین و اسکنر QR حیاتیه.
+
+**⚠️ دام رایج**  
+- درخواست `getUserMedia` بدون `enumerateDevices` (کاربر نمی‌تونه دستگاه انتخاب کنه!).
+- فراموش کردن HTTPS (MediaDevices فقط روی HTTPS کار می‌کنه).
+- عدم مدیریت `devicechange` event (وقتی کاربر USB دوربین رو وصل/جدا می‌کنه).
+- عدم cleanup (قطع stream بعد از اتمام کار).
+- عدم بررسی `deviceId` قبل از استفاده (ممکنه تغییر کرده باشه).
+- فراموش کردن fallback برای مرورگرهای قدیمی.
+- عدم احترام به حریم خصوصی (توضیح ندادن چرا به دوربین نیاز داری).
+- استفاده از `getUserMedia` بدون user gesture در بعضی مرورگرها.
+
+**📏 وضعیت پشتیبانی مرورگرها**
+
+| مرورگر       | پشتیبانی | محدودیت                                  |
+|--------------|-----------|-------------------------------------------|
+| Chrome       | ✅        | فقط HTTPS (به جز localhost)              |
+| Firefox      | ✅        | فقط HTTPS                                |
+| Safari       | ✅        | فقط HTTPS + نیاز به user gesture در iOS  |
+| Edge         | ✅        | فقط HTTPS                                |
+| iOS Safari   | ✅        | محدودیت‌هایی در انتخاب دستگاه            |
+| Samsung      | ✅        | کامل                                     |
+
+> ⚠️ **نکته حیاتی**: این API **فقط روی HTTPS** کار می‌کنه. در `http://` خطا میده (به جز `localhost` برای توسعه).
+
+**🛠️ راه‌حل سریع در کد**
+
+### ۱. هوک React برای مدیریت MediaDevices
+
+```jsx
+// hooks/useMediaDevices.js
+import { useState, useEffect, useCallback, useRef } from 'react';
+
+export function useMediaDevices() {
+  const [devices, setDevices] = useState({
+    audioInputs: [],   // میکروفون‌ها
+    audioOutputs: [],  // بلندگوها
+    videoInputs: [],   // دوربین‌ها
+  });
+  const [stream, setStream] = useState(null);
+  const [error, setError] = useState(null);
+  const [isSupported, setIsSupported] = useState(false);
+  const streamRef = useRef(null);
+
+  useEffect(() => {
+    setIsSupported(
+      'mediaDevices' in navigator && 
+      'getUserMedia' in navigator.mediaDevices &&
+      'enumerateDevices' in navigator.mediaDevices
+    );
+  }, []);
+
+  // ✅ گرفتن لیست دستگاه‌ها
+  const refreshDevices = useCallback(async () => {
+    if (!isSupported) {
+      setError('MediaDevices API در این مرورگر پشتیبانی نمیشه');
+      return;
+    }
+
+    try {
+      setError(null);
+      const deviceList = await navigator.mediaDevices.enumerateDevices();
+
+      setDevices({
+        audioInputs: deviceList.filter(d => d.kind === 'audioinput'),
+        audioOutputs: deviceList.filter(d => d.kind === 'audiooutput'),
+        videoInputs: deviceList.filter(d => d.kind === 'videoinput'),
+      });
+    } catch (err) {
+      setError(err.message);
+    }
+  }, [isSupported]);
+
+  // ✅ شروع استریم با دستگاه‌های پیش‌فرض
+  const startStream = useCallback(async (constraints = {}) => {
+    if (!isSupported) {
+      setError('MediaDevices API پشتیبانی نمیشه');
+      return null;
+    }
+
+    try {
+      setError(null);
+
+      const defaultConstraints = {
+        audio: true,
+        video: true,
+        ...constraints,
+      };
+
+      const mediaStream = await navigator.mediaDevices.getUserMedia(defaultConstraints);
+      setStream(mediaStream);
+      streamRef.current = mediaStream;
+
+      // ✅ بعد از گرفتن مجوز، لیست دستگاه‌ها رو با برچسب واقعی بروزرسانی کن
+      await refreshDevices();
+
+      return mediaStream;
+    } catch (err) {
+      if (err.name === 'NotAllowedError') {
+        setError('دسترسی به دوربین/میکروفون رد شد. لطفاً از تنظیمات مرورگر اجازه دهید.');
+      } else if (err.name === 'NotFoundError') {
+        setError('هیچ دوربین یا میکروفونی پیدا نشد.');
+      } else if (err.name === 'NotReadableError') {
+        setError('دستگاه در حال حاضر در استفاده‌ی برنامه‌ی دیگری است.');
+      } else {
+        setError(err.message);
+      }
+      return null;
+    }
+  }, [isSupported, refreshDevices]);
+
+  // ✅ شروع استریم با دستگاه خاص
+  const startStreamWithDevice = useCallback(async (deviceId, kind = 'videoinput') => {
+    const constraints = {
+      audio: kind === 'audioinput' ? { deviceId: { exact: deviceId } } : true,
+      video: kind === 'videoinput' ? { deviceId: { exact: deviceId } } : true,
+    };
+
+    return startStream(constraints);
+  }, [startStream]);
+
+  // ✅ توقف استریم
+  const stopStream = useCallback(() => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+      setStream(null);
+    }
+  }, []);
+
+  // ✅ گوش دادن به تغییر دستگاه‌ها
+  useEffect(() => {
+    if (!isSupported) return;
+
+    const handleDeviceChange = () => {
+      console.log('🔄 لیست دستگاه‌ها تغییر کرد');
+      refreshDevices();
+    };
+
+    navigator.mediaDevices.addEventListener('devicechange', handleDeviceChange);
+
+    return () => {
+      navigator.mediaDevices.removeEventListener('devicechange', handleDeviceChange);
+    };
+  }, [isSupported, refreshDevices]);
+
+  // ✅ cleanup
+  useEffect(() => {
+    return () => {
+      stopStream();
+    };
+  }, [stopStream]);
+
+  return {
+    isSupported,
+    devices,
+    stream,
+    error,
+    refreshDevices,
+    startStream,
+    startStreamWithDevice,
+    stopStream,
+  };
+}
+```
+
+### ۲. کامپوننت انتخاب دوربین
+
+```jsx
+// components/CameraSelector.jsx
+import { useEffect, useRef } from 'react';
+import { useMediaDevices } from '@/hooks/useMediaDevices';
+
+export function CameraSelector() {
+  const videoRef = useRef(null);
+  const {
+    isSupported,
+    devices,
+    stream,
+    error,
+    startStream,
+    startStreamWithDevice,
+    stopStream,
+  } = useMediaDevices();
+
+  // ✅ نمایش استریم در video element
+  useEffect(() => {
+    if (videoRef.current && stream) {
+      videoRef.current.srcObject = stream;
+    }
+  }, [stream]);
+
+  const handleCameraChange = async (e) => {
+    const deviceId = e.target.value;
+    
+    // ✅ توقف استریم قبلی
+    stopStream();
+    
+    // ✅ شروع استریم با دوربین جدید
+    await startStreamWithDevice(deviceId, 'videoinput');
+  };
+
+  if (!isSupported) {
+    return (
+      <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+        <p className="text-sm text-yellow-800">
+          ⚠️ MediaDevices API در این مرورگر پشتیبانی نمیشه.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* ✅ انتخاب دوربین */}
+      <div className="space-y-2">
+        <label htmlFor="camera-select" className="block text-sm font-medium">
+          انتخاب دوربین
+        </label>
+        <select
+          id="camera-select"
+          onChange={handleCameraChange}
+          className="w-full p-2 border border-gray-300 rounded"
+          disabled={devices.videoInputs.length === 0}
+        >
+          <option value="">دوربین پیش‌فرض</option>
+          {devices.videoInputs.map((device) => (
+            <option key={device.deviceId} value={device.deviceId}>
+              {device.label || `دوربین ${device.deviceId.slice(0, 8)}`}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {/* ✅ دکمه شروع/توقف */}
+      <div className="flex gap-2">
+        {!stream ? (
+          <button
+            onClick={() => startStream()}
+            className="flex-1 bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
+          >
+            🎥 شروع دوربین
+          </button>
+        ) : (
+          <button
+            onClick={stopStream}
+            className="flex-1 bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700"
+          >
+            ⏹️ توقف دوربین
+          </button>
+        )}
+      </div>
+
+      {/* ✅ نمایش ویدیو */}
+      {stream && (
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          muted
+          className="w-full max-w-md mx-auto border border-gray-300 rounded-lg"
+        />
+      )}
+
+      {error && (
+        <div role="alert" className="p-3 bg-red-50 border border-red-200 rounded-lg">
+          <p className="text-sm text-red-800">{error}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+### ۳. کامپوننت انتخاب میکروفون
+
+```jsx
+// components/MicrophoneSelector.jsx
+import { useState, useEffect } from 'react';
+import { useMediaDevices } from '@/hooks/useMediaDevices';
+
+export function MicrophoneSelector() {
+  const { isSupported, devices, startStreamWithDevice, stopStream, error } = useMediaDevices();
+  const [isRecording, setIsRecording] = useState(false);
+  const [audioLevel, setAudioLevel] = useState(0);
+
+  const handleMicChange = async (e) => {
+    const deviceId = e.target.value;
+    stopStream();
+    
+    const stream = await startStreamWithDevice(deviceId, 'audioinput');
+    if (stream) {
+      setIsRecording(true);
+      analyzeAudioLevel(stream);
+    }
+  };
+
+  // ✅ تحلیل سطح صدا
+  const analyzeAudioLevel = (stream) => {
+    const audioContext = new AudioContext();
+    const source = audioContext.createMediaStreamSource(stream);
+    const analyser = audioContext.createAnalyser();
+    source.connect(analyser);
+
+    const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+    const updateLevel = () => {
+      analyser.getByteFrequencyData(dataArray);
+      const average = dataArray.reduce((a, b) => a + b) / dataArray.length;
+      setAudioLevel(average);
+      requestAnimationFrame(updateLevel);
+    };
+
+    updateLevel();
+  };
+
+  if (!isSupported) {
+    return (
+      <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+        <p className="text-sm text-yellow-800">
+          ⚠️ MediaDevices API پشتیبانی نمیشه.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="space-y-2">
+        <label htmlFor="mic-select" className="block text-sm font-medium">
+          انتخاب میکروفون
+        </label>
+        <select
+          id="mic-select"
+          onChange={handleMicChange}
+          className="w-full p-2 border border-gray-300 rounded"
+          disabled={devices.audioInputs.length === 0}
+        >
+          <option value="">میکروفون پیش‌فرض</option>
+          {devices.audioInputs.map((device) => (
+            <option key={device.deviceId} value={device.deviceId}>
+              {device.label || `میکروفون ${device.deviceId.slice(0, 8)}`}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {/* ✅ نمایش سطح صدا */}
+      {isRecording && (
+        <div className="space-y-2">
+          <p className="text-sm font-medium">سطح صدا:</p>
+          <div className="w-full bg-gray-200 rounded-full h-4 overflow-hidden">
+            <div
+              className="h-full bg-green-500 transition-all duration-100"
+              style={{ width: `${Math.min(audioLevel * 2, 100)}%` }}
+            />
+          </div>
+          <p className="text-xs text-gray-600">
+            {audioLevel < 10 ? '🔇 بی‌صدا' : audioLevel < 50 ? '🔉 متوسط' : '🔊 بلند'}
+          </p>
+        </div>
+      )}
+
+      {error && (
+        <div role="alert" className="p-3 bg-red-50 border border-red-200 rounded-lg">
+          <p className="text-sm text-red-800">{error}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+### ۴. استفاده در تماس تصویری
+
+```jsx
+// components/VideoCall.jsx
+import { useState, useRef, useEffect } from 'react';
+import { useMediaDevices } from '@/hooks/useMediaDevices';
+
+export function VideoCall() {
+  const localVideoRef = useRef(null);
+  const { isSupported, devices, stream, startStreamWithDevice, stopStream, error } = useMediaDevices();
+  const [selectedCamera, setSelectedCamera] = useState('');
+  const [selectedMic, setSelectedMic] = useState('');
+
+  useEffect(() => {
+    if (localVideoRef.current && stream) {
+      localVideoRef.current.srcObject = stream;
+    }
+  }, [stream]);
+
+  const handleStartCall = async () => {
+    const constraints = {
+      audio: selectedMic ? { deviceId: { exact: selectedMic } } : true,
+      video: selectedCamera ? { deviceId: { exact: selectedCamera } } : true,
+    };
+
+    await startStreamWithDevice(
+      selectedCamera || selectedMic,
+      selectedCamera ? 'videoinput' : 'audioinput'
+    );
+  };
+
+  return (
+    <div className="space-y-4">
+      <h2 className="text-xl font-bold">تماس تصویری</h2>
+
+      {/* ✅ انتخاب دستگاه‌ها */}
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <label className="block text-sm font-medium mb-1">دوربین</label>
+          <select
+            value={selectedCamera}
+            onChange={(e) => setSelectedCamera(e.target.value)}
+            className="w-full p-2 border rounded"
+          >
+            <option value="">پیش‌فرض</option>
+            {devices.videoInputs.map((d) => (
+              <option key={d.deviceId} value={d.deviceId}>
+                {d.label || `دوربین ${d.deviceId.slice(0, 8)}`}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium mb-1">میکروفون</label>
+          <select
+            value={selectedMic}
+            onChange={(e) => setSelectedMic(e.target.value)}
+            className="w-full p-2 border rounded"
+          >
+            <option value="">پیش‌فرض</option>
+            {devices.audioInputs.map((d) => (
+              <option key={d.deviceId} value={d.deviceId}>
+                {d.label || `میکروفون ${d.deviceId.slice(0, 8)}`}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      {/* ✅ دکمه شروع/توقف */}
+      <div className="flex gap-2">
+        {!stream ? (
+          <button
+            onClick={handleStartCall}
+            className="flex-1 bg-green-600 text-white px-4 py-3 rounded-lg hover:bg-green-700"
+          >
+            📞 شروع تماس
+          </button>
+        ) : (
+          <button
+            onClick={stopStream}
+            className="flex-1 bg-red-600 text-white px-4 py-3 rounded-lg hover:bg-red-700"
+          >
+            📴 پایان تماس
+          </button>
+        )}
+      </div>
+
+      {/* ✅ نمایش ویدیوی محلی */}
+      {stream && (
+        <video
+          ref={localVideoRef}
+          autoPlay
+          playsInline
+          muted
+          className="w-full max-w-lg mx-auto border-2 border-green-500 rounded-lg"
+        />
+      )}
+
+      {error && (
+        <div role="alert" className="p-3 bg-red-50 border border-red-200 rounded-lg">
+          <p className="text-sm text-red-800">{error}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+### ۵. بررسی مجوزها
+
+```jsx
+// hooks/usePermissions.js
+import { useState, useEffect } from 'react';
+
+export function usePermissions() {
+  const [permissions, setPermissions] = useState({
+    camera: 'prompt',   // prompt | granted | denied
+    microphone: 'prompt',
+  });
+
+  useEffect(() => {
+    const checkPermissions = async () => {
+      if (!navigator.permissions) return;
+
+      try {
+        const cameraStatus = await navigator.permissions.query({ name: 'camera' });
+        const micStatus = await navigator.permissions.query({ name: 'microphone' });
+
+        setPermissions({
+          camera: cameraStatus.state,
+          microphone: micStatus.state,
+        });
+
+        // ✅ گوش دادن به تغییر مجوزها
+        cameraStatus.addEventListener('change', () => {
+          setPermissions((prev) => ({ ...prev, camera: cameraStatus.state }));
+        });
+
+        micStatus.addEventListener('change', () => {
+          setPermissions((prev) => ({ ...prev, microphone: micStatus.state }));
+        });
+      } catch (err) {
+        console.error('Permission check failed:', err);
+      }
+    };
+
+    checkPermissions();
+  }, []);
+
+  return permissions;
+}
+
+// ✅ کامپوننت نمایش وضعیت مجوز
+export function PermissionStatus() {
+  const permissions = usePermissions();
+
+  return (
+    <div className="p-4 bg-gray-50 rounded-lg space-y-2">
+      <p className="font-medium">وضعیت مجوزها:</p>
+      <div className="flex items-center gap-2">
+        <span>📷 دوربین:</span>
+        <span className={`px-2 py-1 rounded text-xs ${
+          permissions.camera === 'granted' ? 'bg-green-100 text-green-800' :
+          permissions.camera === 'denied' ? 'bg-red-100 text-red-800' :
+          'bg-yellow-100 text-yellow-800'
+        }`}>
+          {permissions.camera === 'granted' ? '✅ مجاز' :
+           permissions.camera === 'denied' ? '❌ رد شده' : '⏳ در انتظار'}
+        </span>
+      </div>
+      <div className="flex items-center gap-2">
+        <span>🎤 میکروفون:</span>
+        <span className={`px-2 py-1 rounded text-xs ${
+          permissions.microphone === 'granted' ? 'bg-green-100 text-green-800' :
+          permissions.microphone === 'denied' ? 'bg-red-100 text-red-800' :
+          'bg-yellow-100 text-yellow-800'
+        }`}>
+          {permissions.microphone === 'granted' ? '✅ مجاز' :
+           permissions.microphone === 'denied' ? '❌ رد شده' : '⏳ در انتظار'}
+        </span>
+      </div>
+    </div>
+  );
+}
+```
+
+**🔗 ابزار تست**
+
+- **Chrome DevTools** → Application → Permissions (مشاهده مجوزها).
+- **DevTools** → Media (شبیه‌سازی دوربین و میکروفون).
+- **Console**: `navigator.mediaDevices.enumerateDevices().then(console.log)`.
+- **تست واقعی**: روی HTTPS با دوربین و میکروفون واقعی تست کن.
+- **تست devicechange**: USB دوربین رو وصل/جدا کن و ببین لیست آپدیت میشه.
+- **HTTP vs HTTPS**: روی HTTP تست کن؛ باید خطا بده.
+
+**⚠️ چک‌لیست نهایی**
+
+- [ ] سایت روی HTTPS هست؟
+- [ ] بررسی پشتیبانی قبل از استفاده؟
+- [ ] استفاده از `enumerateDevices` برای لیست دستگاه‌ها؟
+- [ ] گوش دادن به `devicechange` event؟
+- [ ] مدیریت خطاهای `NotAllowedError`، `NotFoundError`، `NotReadableError`؟
+- [ ] cleanup stream بعد از اتمام کار (`track.stop()`)؟
+- [ ] بررسی مجوزها با `navigator.permissions`؟
+- [ ] توضیح به کاربر قبل از درخواست مجوز؟
+- [ ] Fallback برای مرورگرهای قدیمی؟
+- [ ] تست با دستگاه‌های واقعی (چند دوربین/میکروفون)؟
+- [ ] تست `devicechange` با وصل/جدا کردن USB؟
+
+> **قانون ۳ ثانیه‌ای:** Console رو باز کن و بنویس `navigator.mediaDevices.enumerateDevices().then(devices => console.log(devices))`. آیا لیست دستگاه‌ها میاد؟ بعد یه دوربین USB وصل کن و دوباره اجرا کن؛ آیا دستگاه جدید اضافه شد؟ اگه نه، یعنی `devicechange` event رو گوش نمی‌دی!
