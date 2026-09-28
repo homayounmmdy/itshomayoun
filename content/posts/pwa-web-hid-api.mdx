@@ -1,0 +1,471 @@
+---
+title: "PWA: Web HID API و ارتباط با دستگاه‌های ورودی"
+date: '2026-09-24'
+playlist: 'PWA - برنامه وب پیشرونده'
+tags: ['PWA', 'Web-HID-API', 'Gamepad', 'Device-API', 'Hardware', 'React', 'USB']
+description: "چطور با Web HID API مستقیماً با کیبورد، دسته بازی و دستگاه‌های ورودی USB/Bluetooth ارتباط برقرار کنیم و داده‌های raw رو بخونیم."
+enableComment: true
+---
+
+# 🎮 PWA: Web HID API و ارتباط با دستگاه‌های ورودی
+
+**💡 مفهوم کلیدی**  
+Web HID API به سایت اجازه میده **مستقیماً با دستگاه‌های Human Interface Device** (کیبورد، ماوس، دسته بازی، جوی‌استیک، دستگاه‌های IoT و...) ارتباط برقرار کنه و **داده‌های raw** رو بخونه/بنویسه. این یعنی می‌تونی اپ‌های حرفه‌ای مثل شبیه‌ساز پرواز، ابزار کالیبره، یا کنترلر سفارشی بسازی.
+
+**⚠️ دام رایج**  
+- فراموش کردن `navigator.hid.requestDevice()` (بدون اجازه‌ی کاربر کار نمی‌کنه!).
+- عدم بررسی پشتیبانی مرورگر (فقط Chrome/Edge!).
+- عدم مدیریت disconnect دستگاه.
+- عدم استفاده از `inputreport` event و تکیه بر polling.
+- فراموش کردن `open()` قبل از خواندن/نوشتن.
+- عدم ارائه‌ی fallback برای مرورگرهای بدون پشتیبانی.
+- نادیده گرفتن حریم خصوصی (دستگاه‌های حساس مثل کیبورد).
+
+**📏 وضعیت پشتیبانی مرورگرها (خیلی محدود!)**
+
+| مرورگر       | پشتیبانی | محدودیت                                  |
+|--------------|-----------|-------------------------------------------|
+| Chrome       | ✅        | نسخه 89+ + نیاز به HTTPS + user gesture  |
+| Edge         | ✅        | نسخه 89+                                 |
+| Opera        | ✅        | نسخه 75+                                 |
+| Safari       | ❌        | **پشتیبانی نمیشه**                        |
+| iOS Safari   | ❌        | پشتیبانی نمیشه                            |
+| Firefox      | ❌        | **پشتیبانی نمیشه** (در حال بررسی)         |
+| دسکتاپ       | ✅        | کامل (فقط Chromium)                       |
+
+> ⚠️ **نکته حیاتی**: این API فقط در مرورگرهای **Chromium-based** کار می‌کنه. همیشه fallback بذار!
+
+**🛠️ راه‌حل سریع در کد**
+
+### ۱. هوک React برای مدیریت HID
+
+```jsx
+// hooks/useHID.js
+import { useState, useCallback, useRef, useEffect } from 'react';
+
+export function useHID() {
+  const [devices, setDevices] = useState([]);
+  const [connectedDevice, setConnectedDevice] = useState(null);
+  const [lastReport, setLastReport] = useState(null);
+  const [error, setError] = useState(null);
+  const deviceRef = useRef(null);
+
+  const isSupported = 'hid' in navigator;
+
+  // ✅ درخواست انتخاب دستگاه
+  const requestDevice = useCallback(async (filters = []) => {
+    if (!isSupported) {
+      setError('Web HID API در این مرورگر پشتیبانی نمیشه');
+      return null;
+    }
+
+    try {
+      // ✅ باز کردن پنجره انتخاب دستگاه
+      const selectedDevices = await navigator.hid.requestDevice({
+        filters: filters.length > 0 ? filters : undefined,
+      });
+
+      if (selectedDevices.length === 0) {
+        setError('هیچ دستگاهی انتخاب نشد');
+        return null;
+      }
+
+      const device = selectedDevices[0];
+      
+      // ✅ باز کردن اتصال
+      if (!device.opened) {
+        await device.open();
+      }
+
+      deviceRef.current = device;
+      setConnectedDevice(device);
+      setDevices((prev) => [...prev, device]);
+      setError(null);
+
+      // ✅ گوش دادن به گزارش‌های ورودی
+      device.addEventListener('inputreport', (event) => {
+        setLastReport({
+          data: new Uint8Array(event.data.buffer),
+          deviceId: event.device.productId,
+          reportId: event.reportId,
+          timestamp: Date.now(),
+        });
+      });
+
+      return device;
+    } catch (err) {
+      setError(err.message);
+      return null;
+    }
+  }, [isSupported]);
+
+  // ✅ ارسال گزارش خروجی (به دستگاه)
+  const sendReport = useCallback(async (reportId, data) => {
+    if (!deviceRef.current || !deviceRef.current.opened) {
+      setError('دستگاه متصل نیست');
+      return false;
+    }
+
+    try {
+      await deviceRef.current.sendReport(reportId, data);
+      return true;
+    } catch (err) {
+      setError(err.message);
+      return false;
+    }
+  }, []);
+
+  // ✅ بستن اتصال
+  const disconnect = useCallback(async () => {
+    if (deviceRef.current && deviceRef.current.opened) {
+      await deviceRef.current.close();
+      setConnectedDevice(null);
+      deviceRef.current = null;
+    }
+  }, []);
+
+  // ✅ گوش دادن به disconnect
+  useEffect(() => {
+    if (!isSupported) return;
+
+    const handleDisconnect = (event) => {
+      if (event.device === deviceRef.current) {
+        setConnectedDevice(null);
+        deviceRef.current = null;
+      }
+    };
+
+    navigator.hid.addEventListener('disconnect', handleDisconnect);
+    return () => {
+      navigator.hid.removeEventListener('disconnect', handleDisconnect);
+    };
+  }, [isSupported]);
+
+  // ✅ cleanup
+  useEffect(() => {
+    return () => {
+      disconnect();
+    };
+  }, [disconnect]);
+
+  return {
+    isSupported,
+    devices,
+    connectedDevice,
+    lastReport,
+    error,
+    requestDevice,
+    sendReport,
+    disconnect,
+  };
+}
+```
+
+### ۲. کامپوننت اتصال به دسته بازی
+
+```jsx
+// components/GamepadConnector.jsx
+import { useHID } from '@/hooks/useHID';
+
+export function GamepadConnector() {
+  const { isSupported, connectedDevice, lastReport, error, requestDevice, disconnect } = useHID();
+
+  const handleConnect = async () => {
+    // ✅ فیلتر برای دسته بازی Xbox (vendorId: 0x045e = Microsoft)
+    await requestDevice([
+      { vendorId: 0x045e }, // Xbox
+      { vendorId: 0x054c }, // PlayStation
+      { vendorId: 0x28de }, // Valve
+    ]);
+  };
+
+  if (!isSupported) {
+    return (
+      <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+        <p className="text-sm text-yellow-800">
+          ⚠️ Web HID API فقط در Chrome و Edge پشتیبانی میشه.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {!connectedDevice ? (
+        <button
+          onClick={handleConnect}
+          className="w-full bg-blue-600 text-white px-6 py-3 rounded-lg 
+                     hover:bg-blue-700 transition-colors font-medium
+                     flex items-center justify-center gap-2"
+        >
+          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+          </svg>
+          اتصال دسته بازی
+        </button>
+      ) : (
+        <div className="space-y-3">
+          <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
+            <p className="font-medium text-green-800">
+              ✅ متصل: {connectedDevice.productName}
+            </p>
+            <p className="text-sm text-gray-600">
+              Vendor: 0x{connectedDevice.vendorId.toString(16)} | 
+              Product: 0x{connectedDevice.productId.toString(16)}
+            </p>
+          </div>
+
+          {/* ✅ نمایش داده‌های ورودی */}
+          {lastReport && (
+            <div className="p-4 bg-gray-50 rounded-lg">
+              <p className="font-medium mb-2">آخرین گزارش:</p>
+              <pre className="text-xs overflow-auto">
+                {Array.from(lastReport.data)
+                  .map((b) => b.toString(16).padStart(2, '0'))
+                  .join(' ')}
+              </pre>
+            </div>
+          )}
+
+          <button
+            onClick={disconnect}
+            className="w-full bg-red-600 text-white px-6 py-3 rounded-lg 
+                       hover:bg-red-700 transition-colors font-medium"
+          >
+            قطع اتصال
+          </button>
+        </div>
+      )}
+
+      {error && (
+        <div role="alert" className="p-3 bg-red-50 border border-red-200 rounded-lg">
+          <p className="text-sm text-red-800">{error}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+### ۳. تفسیر داده‌های دسته بازی
+
+```jsx
+// hooks/useGamepadInput.js
+import { useState, useEffect } from 'react';
+import { useHID } from './useHID';
+
+export function useGamepadInput() {
+  const { lastReport } = useHID();
+  const [gamepadState, setGamepadState] = useState({
+    leftStick: { x: 0, y: 0 },
+    rightStick: { x: 0, y: 0 },
+    buttons: {
+      a: false, b: false, x: false, y: false,
+      lb: false, rb: false,
+      start: false, select: false,
+    },
+    triggers: { left: 0, right: 0 },
+  });
+
+  useEffect(() => {
+    if (!lastReport) return;
+
+    const data = lastReport.data;
+
+    // ✅ تفسیر داده‌های Xbox Controller (مثال)
+    // این مقادیر بسته به دستگاه متفاوته!
+    setGamepadState({
+      leftStick: {
+        x: (data[1] - 128) / 128, // -1 تا 1
+        y: (data[2] - 128) / 128,
+      },
+      rightStick: {
+        x: (data[3] - 128) / 128,
+        y: (data[4] - 128) / 128,
+      },
+      buttons: {
+        a: (data[5] & 0x01) !== 0,
+        b: (data[5] & 0x02) !== 0,
+        x: (data[5] & 0x04) !== 0,
+        y: (data[5] & 0x08) !== 0,
+        lb: (data[5] & 0x10) !== 0,
+        rb: (data[5] & 0x20) !== 0,
+        start: (data[5] & 0x40) !== 0,
+        select: (data[5] & 0x80) !== 0,
+      },
+      triggers: {
+        left: data[6] / 255,   // 0 تا 1
+        right: data[7] / 255,
+      },
+    });
+  }, [lastReport]);
+
+  return gamepadState;
+}
+```
+
+### ۴. استفاده در بازی
+
+```jsx
+// components/GameWithGamepad.jsx
+import { useGamepadInput } from '@/hooks/useGamepadInput';
+
+export function GameWithGamepad() {
+  const gamepad = useGamepadInput();
+
+  return (
+    <div className="p-6 bg-gray-900 text-white rounded-lg space-y-4">
+      <h2 className="text-2xl font-bold">🎮 بازی با دسته</h2>
+
+      {/* ✅ نمایش وضعیت دکمه‌ها */}
+      <div className="grid grid-cols-4 gap-2">
+        {Object.entries(gamepad.buttons).map(([key, pressed]) => (
+          <div
+            key={key}
+            className={`p-2 rounded text-center text-sm ${
+              pressed ? 'bg-green-600' : 'bg-gray-700'
+            }`}
+          >
+            {key.toUpperCase()}
+          </div>
+        ))}
+      </div>
+
+      {/* ✅ نمایش joystick */}
+      <div className="flex justify-around">
+        <div className="text-center">
+          <p className="text-sm mb-2">Left Stick</p>
+          <div className="w-24 h-24 bg-gray-700 rounded-full relative">
+            <div
+              className="w-4 h-4 bg-blue-500 rounded-full absolute"
+              style={{
+                left: `${50 + gamepad.leftStick.x * 40}%`,
+                top: `${50 + gamepad.leftStick.y * 40}%`,
+                transform: 'translate(-50%, -50%)',
+              }}
+            />
+          </div>
+        </div>
+
+        <div className="text-center">
+          <p className="text-sm mb-2">Right Stick</p>
+          <div className="w-24 h-24 bg-gray-700 rounded-full relative">
+            <div
+              className="w-4 h-4 bg-red-500 rounded-full absolute"
+              style={{
+                left: `${50 + gamepad.rightStick.x * 40}%`,
+                top: `${50 + gamepad.rightStick.y * 40}%`,
+                transform: 'translate(-50%, -50%)',
+              }}
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* ✅ نمایش triggers */}
+      <div className="flex gap-4">
+        <div className="flex-1">
+          <p className="text-sm mb-1">Left Trigger</p>
+          <div className="h-4 bg-gray-700 rounded overflow-hidden">
+            <div
+              className="h-full bg-yellow-500 transition-all"
+              style={{ width: `${gamepad.triggers.left * 100}%` }}
+            />
+          </div>
+        </div>
+        <div className="flex-1">
+          <p className="text-sm mb-1">Right Trigger</p>
+          <div className="h-4 bg-gray-700 rounded overflow-hidden">
+            <div
+              className="h-full bg-yellow-500 transition-all"
+              style={{ width: `${gamepad.triggers.right * 100}%` }}
+            />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+```
+
+### ۵. Fallback: Gamepad API (برای مرورگرهای بدون HID)
+
+```jsx
+// components/GamepadConnectorWithFallback.jsx
+import { useState, useEffect } from 'react';
+import { GamepadConnector } from './GamepadConnector';
+
+export function GamepadConnectorWithFallback() {
+  const [useStandardGamepad, setUseStandardGamepad] = useState(false);
+  const [gamepads, setGamepads] = useState([]);
+
+  // ✅ بررسی پشتیبانی HID
+  const isHIDSupported = 'hid' in navigator;
+
+  // ✅ Fallback: Gamepad API (استانداردتر ولی محدودتر)
+  useEffect(() => {
+    if (isHIDSupported || !useStandardGamepad) return;
+
+    const handleConnect = () => {
+      setGamepads(navigator.getGamepads());
+    };
+
+    window.addEventListener('gamepadconnected', handleConnect);
+    window.addEventListener('gamepaddisconnected', handleConnect);
+
+    return () => {
+      window.removeEventListener('gamepadconnected', handleConnect);
+      window.removeEventListener('gamepaddisconnected', handleConnect);
+    };
+  }, [isHIDSupported, useStandardGamepad]);
+
+  if (!isHIDSupported) {
+    return (
+      <div className="space-y-4">
+        <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+          <p className="text-sm text-yellow-800">
+            ⚠️ Web HID API در این مرورگر پشتیبانی نمیشه. از Gamepad API استاندارد استفاده می‌کنیم.
+          </p>
+        </div>
+        
+        <button
+          onClick={() => setUseStandardGamepad(true)}
+          className="w-full bg-blue-600 text-white px-6 py-3 rounded-lg"
+        >
+          فعال‌سازی Gamepad API
+        </button>
+
+        {useStandardGamepad && gamepads.length > 0 && (
+          <div className="p-4 bg-green-50 rounded-lg">
+            <p>✅ دسته بازی متصل شد!</p>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return <GamepadConnector />;
+}
+```
+
+**🔗 ابزار تست**
+
+- **Chrome DevTools** → Application → HID Devices (مشاهده دستگاه‌های متصل).
+- **Console**: `navigator.hid.getDevices()` برای مشاهده دستگاه‌های اجازه‌داده‌شده.
+- **تست واقعی**: یه دسته بازی Xbox یا PlayStation وصل کن و تست کن.
+- **Safari/Firefox**: تست کن که fallback درست کار می‌کنه.
+- **USBDeview** (ویندوز): مشاهده vendorId و productId دستگاه‌ها.
+
+**⚠️ چک‌لیست نهایی**
+
+- [ ] بررسی پشتیبانی مرورگر قبل از استفاده؟
+- [ ] استفاده از `requestDevice()` با user gesture؟
+- [ ] مدیریت disconnect دستگاه؟
+- [ ] گوش دادن به `inputreport` event (نه polling)؟
+- [ ] `open()` قبل از خواندن/نوشتن؟
+- [ ] Fallback برای مرورگرهای بدون پشتیبانی؟
+- [ ] cleanup در unmount کامپوننت؟
+- [ ] احترام به حریم خصوصی (توضیح به کاربر)؟
+- [ ] تست با دستگاه واقعی؟
+
+> **قانون ۳ ثانیه‌ای:** سایت رو روی Chrome باز کن، دکمه "اتصال دسته بازی" رو بزن. آیا پنجره انتخاب دستگاه باز میشه؟ بعد دسته رو وصل کن و انتخاب کن. آیا داده‌های raw نشون داده میشه؟ بعد Safari رو باز کن؛ آیا fallback (Gamepad API) کار می‌کنه؟ اگر نه، یعنی API رو درست پیاده‌سازی نکردی!
