@@ -1,0 +1,474 @@
+---
+title: "PWA: IndexedDB و پایگاه داده‌ی کلان در مرورگر"
+date: '2026-09-24'
+playlist: 'PWA - برنامه وب پیشرونده'
+tags: ['PWA', 'IndexedDB', 'Storage', 'Offline', 'Database', 'React', 'Async']
+description: "چطور با IndexedDB داده‌های حجیم رو در مرورگر ذخیره کنیم، چرا localStorage کافی نیست و چطور یه wrapper ساده و promise-based بسازیم."
+enableComment: true
+---
+
+# 🗄️ PWA: IndexedDB و پایگاه داده‌ی کلان در مرورگر
+
+**💡 مفهوم کلیدی**  
+IndexedDB یه **پایگاه داده‌ی NoSQL** داخل مرورگره که برای ذخیره‌ی **داده‌های حجیم و ساختاریافته** طراحی شده. برخلاف `localStorage` که فقط ۵-۱۰ مگابایت جا داره و sync هست، IndexedDB صدها مگابایت (حتی گیگابایت) جا داره و **کاملاً async** هست. برای PWAها که می‌خوان داده‌ها رو آفلاین نگه دارن (مثل لیست محصولات، یادداشت‌ها، کش تصاویر) حیاتیه.
+
+**⚠️ دام رایج**  
+- استفاده از API خام و پیچیده (callback hell!).
+- فراموش کردن `transaction` و `objectStore` درست.
+- عدم مدیریت `versionchange` (آپدیت ساختار دیتابیس).
+- ذخیره‌ی داده‌های حساس (توکن، پسورد) بدون رمزنگاری.
+- عدم پاک کردن داده‌ها وقتی کاربر از اپ خارج میشه.
+- استفاده از IndexedDB برای داده‌های کوچک (localStorage کافیه!).
+- عدم بررسی quota و مدیریت پر شدن فضا.
+- نادیده کردن `onblocked` هنگام آپگرید دیتابیس.
+
+**📏 مقایسه با سایر روش‌های ذخیره‌سازی**
+
+| ویژگی              | localStorage | sessionStorage | IndexedDB       | Cache API      |
+|--------------------|--------------|----------------|------------------|----------------|
+| ظرفیت              | ۵-۱۰ MB      | ۵-۱۰ MB        | صدها MB تا GB   | محدود          |
+| نوع داده           | فقط string   | فقط string     | هر JS object    | Response       |
+| Sync/Async         | Sync ❌      | Sync ❌        | Async ✅         | Async ✅       |
+| ساختار             | Key-Value    | Key-Value      | Object Store     | URL-based      |
+| Query              | ❌           | ❌             | ✅ (با Index)    | ❌             |
+| در Service Worker  | ✅           | ❌             | ✅               | ✅             |
+| مناسب برای         | تنظیمات کوچک | داده‌ی session | داده‌ی حجیم      | assets         |
+
+**🛠️ راه‌حل سریع در کد**
+
+### ۱. هوک React با کتابخانه `idb` (پیشنهادی)
+
+```bash
+npm install idb
+```
+
+```jsx
+// hooks/useIndexedDB.js
+import { openDB } from 'idb';
+import { useState, useEffect, useCallback } from 'react';
+
+const DB_NAME = 'my-pwa-db';
+const DB_VERSION = 1;
+
+// ✅ راه‌اندازی دیتابیس (یک‌بار)
+let dbPromise = null;
+
+function getDB() {
+  if (!dbPromise) {
+    dbPromise = openDB(DB_NAME, DB_VERSION, {
+      upgrade(db) {
+        // ✅ ساخت object store ها
+        if (!db.objectStoreNames.contains('products')) {
+          const store = db.createObjectStore('products', { keyPath: 'id' });
+          store.createIndex('by-category', 'category');
+          store.createIndex('by-price', 'price');
+        }
+
+        if (!db.objectStoreNames.contains('notes')) {
+          db.createObjectStore('notes', { keyPath: 'id', autoIncrement: true });
+        }
+
+        if (!db.objectStoreNames.contains('settings')) {
+          db.createObjectStore('settings', { keyPath: 'key' });
+        }
+      },
+      blocked() {
+        console.warn('⚠️ دیتابیس بلاک شده. لطفاً تب‌های دیگه رو ببندید.');
+      },
+      blocking() {
+        console.warn('⚠️ نسخه‌ی جدید دیتابیس در دسترسه.');
+      },
+      terminated() {
+        console.error('❌ اتصال به دیتابیس قطع شد.');
+        dbPromise = null;
+      },
+    });
+  }
+  return dbPromise;
+}
+
+// ✅ هوک عمومی برای CRUD
+export function useIndexedDB(storeName) {
+  const [isReady, setIsReady] = useState(false);
+
+  useEffect(() => {
+    getDB().then(() => setIsReady(true));
+  }, []);
+
+  // ✅ افزودن یا آپدیت
+  const put = useCallback(async (item) => {
+    const db = await getDB();
+    return db.put(storeName, item);
+  }, [storeName]);
+
+  // ✅ افزودن (اگه وجود نداشته باشه)
+  const add = useCallback(async (item) => {
+    const db = await getDB();
+    return db.add(storeName, item);
+  }, [storeName]);
+
+  // ✅ گرفتن یک آیتم
+  const get = useCallback(async (key) => {
+    const db = await getDB();
+    return db.get(storeName, key);
+  }, [storeName]);
+
+  // ✅ گرفتن همه
+  const getAll = useCallback(async () => {
+    const db = await getDB();
+    return db.getAll(storeName);
+  }, [storeName]);
+
+  // ✅ حذف
+  const remove = useCallback(async (key) => {
+    const db = await getDB();
+    return db.delete(storeName, key);
+  }, [storeName]);
+
+  // ✅ جستجو با index
+  const getByIndex = useCallback(async (indexName, value) => {
+    const db = await getDB();
+    return db.getAllFromIndex(storeName, indexName, value);
+  }, [storeName]);
+
+  // ✅ پاک کردن کل store
+  const clear = useCallback(async () => {
+    const db = await getDB();
+    return db.clear(storeName);
+  }, [storeName]);
+
+  return { isReady, put, add, get, getAll, remove, getByIndex, clear };
+}
+```
+
+### ۲. استفاده در کامپوننت: لیست محصولات آفلاین
+
+```jsx
+// components/ProductList.jsx
+import { useState, useEffect } from 'react';
+import { useIndexedDB } from '@/hooks/useIndexedDB';
+
+export function ProductList() {
+  const { isReady, getAll, put, remove } = useIndexedDB('products');
+  const [products, setProducts] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  // ✅ بارگذاری اولیه از IndexedDB
+  useEffect(() => {
+    if (!isReady) return;
+
+    const loadProducts = async () => {
+      const data = await getAll();
+      setProducts(data || []);
+      setLoading(false);
+    };
+
+    loadProducts();
+  }, [isReady, getAll]);
+
+  // ✅ sync با سرور (وقتی آنلاین شد)
+  useEffect(() => {
+    const syncWithServer = async () => {
+      if (!navigator.onLine) return;
+
+      try {
+        const response = await fetch('/api/products');
+        const serverProducts = await response.json();
+
+        // ✅ ذخیره در IndexedDB
+        for (const product of serverProducts) {
+          await put(product);
+        }
+
+        setProducts(serverProducts);
+      } catch (error) {
+        console.error('Sync failed:', error);
+      }
+    };
+
+    syncWithServer();
+
+    window.addEventListener('online', syncWithServer);
+    return () => window.removeEventListener('online', syncWithServer);
+  }, [put]);
+
+  const handleDelete = async (id) => {
+    await remove(id);
+    setProducts((prev) => prev.filter((p) => p.id !== id));
+  };
+
+  if (loading) return <p>در حال بارگذاری...</p>;
+
+  return (
+    <div className="space-y-3">
+      <h2 className="text-xl font-bold">
+        محصولات ({products.length})
+        {!navigator.onLine && <span className="text-sm text-gray-500"> (آفلاین)</span>}
+      </h2>
+
+      {products.length === 0 ? (
+        <p className="text-gray-500">هیچ محصولی وجود نداره.</p>
+      ) : (
+        <ul className="space-y-2">
+          {products.map((product) => (
+            <li
+              key={product.id}
+              className="p-4 bg-white border border-gray-200 rounded-lg flex justify-between items-center"
+            >
+              <div>
+                <p className="font-medium">{product.name}</p>
+                <p className="text-sm text-gray-600">
+                  {product.price.toLocaleString()} تومان | دسته: {product.category}
+                </p>
+              </div>
+              <button
+                onClick={() => handleDelete(product.id)}
+                className="text-red-600 hover:text-red-800 text-sm"
+              >
+                حذف
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+```
+
+### ۳. جستجو با Index
+
+```jsx
+// components/CategoryFilter.jsx
+import { useState } from 'react';
+import { useIndexedDB } from '@/hooks/useIndexedDB';
+
+export function CategoryFilter() {
+  const { getByIndex } = useIndexedDB('products');
+  const [category, setCategory] = useState('');
+  const [results, setResults] = useState([]);
+
+  const handleSearch = async () => {
+    if (!category) {
+      setResults([]);
+      return;
+    }
+    const data = await getByIndex('by-category', category);
+    setResults(data);
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="flex gap-2">
+        <select
+          value={category}
+          onChange={(e) => setCategory(e.target.value)}
+          className="flex-1 p-2 border border-gray-300 rounded"
+        >
+          <option value="">همه دسته‌ها</option>
+          <option value="electronics">الکترونیک</option>
+          <option value="clothing">پوشاک</option>
+          <option value="books">کتاب</option>
+        </select>
+        <button
+          onClick={handleSearch}
+          className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
+        >
+          جستجو
+        </button>
+      </div>
+
+      {results.length > 0 && (
+        <ul className="space-y-1">
+          {results.map((p) => (
+            <li key={p.id} className="p-2 bg-gray-50 rounded">
+              {p.name} - {p.price.toLocaleString()} تومان
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+```
+
+### ۴. استفاده در Service Worker (ذخیره‌ی API responses)
+
+```js
+// public/sw.js
+import { openDB } from 'idb';
+
+const DB_NAME = 'api-cache';
+const STORE_NAME = 'responses';
+
+async function cacheResponse(url, data) {
+  const db = await openDB(DB_NAME, 1, {
+    upgrade(db) {
+      if (!db.objectStoreNames.contains(STORE_NAME)) {
+        db.createObjectStore(STORE_NAME);
+      }
+    },
+  });
+
+  await db.put(STORE_NAME, {
+    data,
+    timestamp: Date.now(),
+  }, url);
+}
+
+async function getCachedResponse(url, maxAge = 3600000) {
+  const db = await openDB(DB_NAME, 1);
+  const cached = await db.get(STORE_NAME, url);
+
+  if (!cached) return null;
+  if (Date.now() - cached.timestamp > maxAge) return null; // منقضی شده
+
+  return cached.data;
+}
+
+self.addEventListener('fetch', (event) => {
+  if (event.request.url.includes('/api/products')) {
+    event.respondWith(
+      (async () => {
+        // ✅ اول از IndexedDB چک کن
+        const cached = await getCachedResponse(event.request.url);
+        if (cached) {
+          // ✅ در پس‌زمینه آپدیت کن
+          fetch(event.request).then(async (response) => {
+            if (response.ok) {
+              const data = await response.json();
+              await cacheResponse(event.request.url, data);
+            }
+          });
+          return new Response(JSON.stringify(cached), {
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+
+        // ✅ اگه نبود، از شبکه بگیر
+        const response = await fetch(event.request);
+        if (response.ok) {
+          const data = await response.clone().json();
+          await cacheResponse(event.request.url, data);
+        }
+        return response;
+      })()
+    );
+  }
+});
+```
+
+### ۵. مدیریت quota و پاک‌سازی
+
+```jsx
+// hooks/useStorageQuota.js
+import { useState, useEffect } from 'react';
+
+export function useStorageQuota() {
+  const [quota, setQuota] = useState(null);
+
+  useEffect(() => {
+    const checkQuota = async () => {
+      if (!navigator.storage || !navigator.storage.estimate) return;
+
+      const estimate = await navigator.storage.estimate();
+      setQuota({
+        usage: estimate.usage,           // bytes استفاده‌شده
+        quota: estimate.quota,           // bytes کل
+        usagePercent: ((estimate.usage / estimate.quota) * 100).toFixed(2),
+        usageMB: (estimate.usage / 1024 / 1024).toFixed(2),
+        quotaMB: (estimate.quota / 1024 / 1024).toFixed(2),
+      });
+    };
+
+    checkQuota();
+  }, []);
+
+  return quota;
+}
+
+// ✅ کامپوننت نمایش وضعیت ذخیره‌سازی
+export function StorageStatus() {
+  const quota = useStorageQuota();
+
+  if (!quota) return null;
+
+  return (
+    <div className="p-4 bg-gray-50 rounded-lg">
+      <p className="text-sm font-medium">وضعیت ذخیره‌سازی:</p>
+      <p className="text-xs text-gray-600 mt-1">
+        {quota.usageMB} MB از {quota.quotaMB} MB استفاده شده ({quota.usagePercent}%)
+      </p>
+      <div className="w-full bg-gray-200 rounded-full h-2 mt-2">
+        <div
+          className={`h-2 rounded-full ${
+            parseFloat(quota.usagePercent) > 80 ? 'bg-red-500' : 'bg-blue-500'
+          }`}
+          style={{ width: `${quota.usagePercent}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+```
+
+### ۶. آپگرید دیتابیس (Version Migration)
+
+```js
+// ✅ در hooks/useIndexedDB.js
+const DB_VERSION = 2; // ✅ نسخه رو بالا ببر
+
+function getDB() {
+  if (!dbPromise) {
+    dbPromise = openDB(DB_NAME, DB_VERSION, {
+      upgrade(db, oldVersion, newVersion, transaction) {
+        if (oldVersion < 1) {
+          // ✅ migration از نسخه 0 به 1
+          db.createObjectStore('products', { keyPath: 'id' });
+        }
+
+        if (oldVersion < 2) {
+          // ✅ migration از نسخه 1 به 2: اضافه کردن فیلد جدید
+          const productStore = transaction.objectStore('products');
+          productStore.createIndex('by-created', 'createdAt');
+
+          // ✅ اضافه کردن store جدید
+          if (!db.objectStoreNames.contains('cart')) {
+            db.createObjectStore('cart', { keyPath: 'productId' });
+          }
+        }
+      },
+    });
+  }
+  return dbPromise;
+}
+```
+
+**🔗 کتابخانه‌های پیشنهادی**
+
+- **[idb](https://github.com/jakearchibald/idb)**: کوچک (۱KB)، promise-based، توسط Jake Archibald (تیم Chrome).
+- **[Dexie.js](https://dexie.org)**: کامل‌تر، با query builder و React hooks.
+- **[localforage](https://localforage.github.io/localForage/)**: fallback خودکار (IndexedDB → WebSQL → localStorage).
+
+**🔗 ابزار تست**
+
+- **Chrome DevTools** → Application → IndexedDB (مشاهده دیتابیس‌ها و داده‌ها).
+- **DevTools** → Application → Storage → Clear site data (پاک کردن).
+- **Console**: `indexedDB.databases()` برای لیست دیتابیس‌ها.
+- **Storage** → Quota usage برای بررسی فضای استفاده‌شده.
+- **Incognito Mode**: تست کن که داده‌ها بعد از بستن پاک میشن.
+
+**⚠️ چک‌لیست نهایی**
+
+- [ ] از کتابخانه‌ی promise-based (مثل `idb`) استفاده کردی؟
+- [ ] `objectStore` با `keyPath` درست تعریف شده؟
+- [ ] `transaction` درست مدیریت میشه؟
+- [ ] `versionchange` و `upgrade` پیاده‌سازی شده؟
+- [ ] `blocked` و `terminated` مدیریت شدن؟
+- [ ] quota چک میشه؟
+- [ ] داده‌های حساس رمزنگاری شدن؟
+- [ ] در Service Worker قابل استفاده‌ست؟
+- [ ] Fallback برای مرورگرهای قدیمی داری؟
+- [ ] در DevTools → Application تست کردی؟
+
+> **قانون ۳ ثانیه‌ای:** DevTools → Application → IndexedDB رو باز کن. آیا دیتابیس شما اونجاست؟ داخلش رو چک کن؛ آیا object store ها و داده‌ها درست ذخیره شدن؟ بعد یه بار صفحه رو رفرش کن؛ آیا داده‌ها هنوز هستن؟ اگه نه، یعنی promise رو درست await نکردی!
