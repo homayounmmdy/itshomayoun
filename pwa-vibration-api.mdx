@@ -1,0 +1,308 @@
+---
+title: "PWA: Vibration API و بازخورد لمسی هوشمند"
+date: '2026-09-24'
+playlist: 'PWA - برنامه وب پیشرونده'
+tags: ['PWA', 'Vibration-API', 'Haptic-Feedback', 'Device-API', 'UX', 'React']
+description: "چطور با Vibration API بازخورد لمسی به کاربر بدیم، الگوهای لرزش رو طراحی کنیم و از آزار دادن کاربر با لرزش‌های بی‌مورد جلوگیری کنیم."
+enableComment: true
+---
+
+# 📳 PWA: Vibration API و بازخورد لمسی هوشمند
+
+**💡 مفهوم کلیدی**  
+Vibration API به سایت اجازه میده **دستگاه رو بلرزونه** تا بازخورد لمسی (haptic feedback) به کاربر بده. این قابلیت برای **تأیید اکشن‌ها**، **هشدار خطا**، **بازی‌ها** و **اعلان‌ها** فوق‌العاده‌ست و تجربه‌ی اپ‌مانند رو تقویت می‌کنه.
+
+**⚠️ دام رایج**  
+- لرزش بی‌دلیل و مکرر (آزار دادن کاربر!).
+- فراموش کردن بررسی پشتیبانی مرورگر.
+- عدم احترام به `prefers-reduced-motion`.
+- استفاده بدون user gesture (مرورگر بلاک می‌کنه).
+- الگوهای لرزش طولانی و آزاردهنده.
+- عدم ارائه‌ی راه غیرفعال‌سازی برای کاربر.
+
+**📏 وضعیت پشتیبانی مرورگرها**
+
+| مرورگر       | پشتیبانی | محدودیت                                  |
+|--------------|-----------|-------------------------------------------|
+| Chrome       | ✅        | فقط موبایل + نیاز به user gesture         |
+| Edge         | ✅        | فقط موبایل                                |
+| Firefox      | ✅        | فقط موبایل                                |
+| Safari       | ❌        | **پشتیبانی نمیشه**                        |
+| iOS Safari   | ❌        | پشتیبانی نمیشه                            |
+| Samsung      | ✅        | کامل                                      |
+
+> ⚠️ **نکته حیاتی**: این API فقط در **موبایل** و با **تعامل کاربر** (کلیک، تپ) کار می‌کنه. در دسکتاپ و Safari کار نمی‌کنه.
+
+**🛠️ راه‌حل سریع در کد**
+
+### ۱. هوک React برای مدیریت لرزش
+
+```jsx
+// hooks/useVibration.js
+import { useCallback } from 'react';
+
+export function useVibration() {
+  const isSupported = 'vibrate' in navigator;
+
+  // ✅ لرزش ساده (یک بار)
+  const vibrate = useCallback((duration = 50) => {
+    if (!isSupported) return;
+    navigator.vibrate(duration);
+  }, [isSupported]);
+
+  // ✅ الگوی لرزش (آرایه‌ای از میلی‌ثانیه)
+  const vibratePattern = useCallback((pattern) => {
+    if (!isSupported) return;
+    navigator.vibrate(pattern);
+  }, [isSupported]);
+
+  // ✅ لرزش تأیید (کوتاه)
+  const vibrateSuccess = useCallback(() => {
+    vibrate(30);
+  }, [vibrate]);
+
+  // ✅ لرزش خطا (دو بار)
+  const vibrateError = useCallback(() => {
+    vibratePattern([100, 50, 100]);
+  }, [vibratePattern]);
+
+  // ✅ لرزش هشدار (سه بار)
+  const vibrateWarning = useCallback(() => {
+    vibratePattern([50, 30, 50, 30, 50]);
+  }, [vibratePattern]);
+
+  // ✅ توقف لرزش
+  const stopVibration = useCallback(() => {
+    if (!isSupported) return;
+    navigator.vibrate(0);
+  }, [isSupported]);
+
+  return {
+    isSupported,
+    vibrate,
+    vibratePattern,
+    vibrateSuccess,
+    vibrateError,
+    vibrateWarning,
+    stopVibration,
+  };
+}
+```
+
+### ۲. کامپوننت دکمه با بازخورد لمسی
+
+```jsx
+// components/HapticButton.jsx
+import { useVibration } from '@/hooks/useVibration';
+
+export function HapticButton({ 
+  children, 
+  onClick, 
+  feedbackType = 'success', // success | error | warning
+  ...props 
+}) {
+  const { vibrateSuccess, vibrateError, vibrateWarning } = useVibration();
+
+  const handleClick = (e) => {
+    // ✅ لرزش قبل از اکشن
+    if (feedbackType === 'success') vibrateSuccess();
+    if (feedbackType === 'error') vibrateError();
+    if (feedbackType === 'warning') vibrateWarning();
+
+    onClick?.(e);
+  };
+
+  return (
+    <button
+      onClick={handleClick}
+      {...props}
+    >
+      {children}
+    </button>
+  );
+}
+
+// استفاده:
+<HapticButton onClick={handleDelete} feedbackType="warning">
+  حذف
+</HapticButton>
+```
+
+### ۳. احترام به prefers-reduced-motion
+
+```jsx
+// hooks/useVibration.js (نسخه بهبودیافته)
+import { useCallback, useState, useEffect } from 'react';
+
+export function useVibration() {
+  const isSupported = 'vibrate' in navigator;
+  const [reducedMotion, setReducedMotion] = useState(false);
+
+  useEffect(() => {
+    const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+    setReducedMotion(mq.matches);
+
+    const handler = (e) => setReducedMotion(e.matches);
+    mq.addEventListener('change', handler);
+    return () => mq.removeEventListener('change', handler);
+  }, []);
+
+  const vibrate = useCallback((duration = 50) => {
+    // ✅ عدم لرزش اگر کاربر reduced motion رو فعال کرده
+    if (!isSupported || reducedMotion) return;
+    navigator.vibrate(duration);
+  }, [isSupported, reducedMotion]);
+
+  // ... بقیه متدها
+
+  return { isSupported, reducedMotion, vibrate, /* ... */ };
+}
+```
+
+### ۴. استفاده در فرم‌ها
+
+```jsx
+// components/SubmitForm.jsx
+import { useVibration } from '@/hooks/useVibration';
+
+export function SubmitForm() {
+  const { vibrateSuccess, vibrateError } = useVibration();
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+
+    try {
+      await submitData();
+      vibrateSuccess(); // ✅ لرزش تأیید
+      alert('با موفقیت ارسال شد');
+    } catch (error) {
+      vibrateError(); // ✅ لرزش خطا
+      alert('خطا در ارسال');
+    }
+  };
+
+  return (
+    <form onSubmit={handleSubmit}>
+      {/* فرم */}
+      <button type="submit">ارسال</button>
+    </form>
+  );
+}
+```
+
+### ۵. استفاده در بازی‌ها
+
+```jsx
+// components/GameButton.jsx
+import { useVibration } from '@/hooks/useVibration';
+
+export function GameButton({ onHit }) {
+  const { vibratePattern } = useVibration();
+
+  const handleHit = () => {
+    // ✅ الگوی لرزش برای ضربه در بازی
+    vibratePattern([20, 10, 20]);
+    onHit?.();
+  };
+
+  return (
+    <button onClick={handleHit} className="game-btn">
+      ضربه!
+    </button>
+  );
+}
+```
+
+### ۶. ترکیب با Notification
+
+```js
+// public/sw.js
+self.addEventListener('push', (event) => {
+  const data = event.data.json();
+
+  event.waitUntil(
+    self.registration.showNotification(data.title, {
+      body: data.body,
+      icon: '/icon.png',
+      // ✅ لرزش هنگام نمایش اعلان
+      vibrate: [200, 100, 200],
+      // ✅ صدا
+      sound: '/notification.mp3',
+    })
+  );
+});
+```
+
+### ۷. تنظیمات کاربر
+
+```jsx
+// components/VibrationSettings.jsx
+import { useState } from 'react';
+
+export function VibrationSettings() {
+  const [enabled, setEnabled] = useState(
+    () => localStorage.getItem('vibration-enabled') !== 'false'
+  );
+
+  const handleChange = (e) => {
+    setEnabled(e.target.checked);
+    localStorage.setItem('vibration-enabled', e.target.checked);
+  };
+
+  return (
+    <label className="flex items-center gap-2">
+      <input
+        type="checkbox"
+        checked={enabled}
+        onChange={handleChange}
+      />
+      فعال‌سازی بازخورد لمسی
+    </label>
+  );
+}
+```
+
+**🎨 الگوهای لرزش پیشنهادی**
+
+```js
+// ✅ تأیید موفقیت‌آمیز
+navigator.vibrate(30);
+
+// ✅ خطا
+navigator.vibrate([100, 50, 100]);
+
+// ✅ هشدار
+navigator.vibrate([50, 30, 50, 30, 50]);
+
+// ✅ اعلان مهم
+navigator.vibrate([200, 100, 200, 100, 200]);
+
+// ✅ بازی (ضربه)
+navigator.vibrate([20, 10, 20]);
+
+// ✅ لرزش مداوم (با احتیاط!)
+navigator.vibrate([500, 200, 500, 200, 500]);
+
+// ✅ توقف لرزش
+navigator.vibrate(0);
+```
+
+**🔗 ابزار تست**
+
+- **Chrome DevTools** → Sensors → Vibration (شبیه‌سازی).
+- **تست واقعی**: روی موبایل اندروید با Chrome تست کن.
+- **Console**: `navigator.vibrate(200)` برای تست سریع.
+- **Safari/iOS**: تست کن که بدون خطا کار می‌کنه (fallback).
+
+**⚠️ چک‌لیست نهایی**
+
+- [ ] بررسی پشتیبانی مرورگر قبل از استفاده؟
+- [ ] احترام به `prefers-reduced-motion`؟
+- [ ] استفاده فقط در response به user gesture؟
+- [ ] الگوهای لرزش کوتاه و معنادار؟
+- [ ] ارائه‌ی راه غیرفعال‌سازی به کاربر؟
+- [ ] عدم استفاده‌ی بیش از حد (spam)؟
+- [ ] تست در Safari/Firefox بدون خطا؟
+- [ ] ترکیب با سایر بازخوردها (صدا، بصری)؟
+
+> **قانون ۳ ثانیه‌ای:** سایت رو روی موبایل باز کن، یه دکمه رو بزن. آیا لرزش کوتاه و معناداری حس می‌کنی؟ بعد برو به تنظیمات accessibility گوشی و `Reduce Motion` رو فعال کن. آیا لرزش غیرفعال شد؟ اگر نه، یعنی به ترجیح کاربر احترام نذاشتی!
