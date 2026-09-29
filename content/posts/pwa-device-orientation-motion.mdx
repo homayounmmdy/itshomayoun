@@ -1,0 +1,416 @@
+---
+title: "PWA: Device Orientation API و شتاب‌سنج/ژیروسکوپ"
+date: '2026-09-29'
+playlist: 'PWA - برنامه وب پیشرونده'
+tags: ['PWA', 'Device-Orientation', 'Accelerometer', 'Gyroscope', 'Device-API', 'React', 'Motion']
+description: "چطور با Device Orientation و Device Motion API به شتاب‌سنج و ژیروسکوپ دستگاه دسترسی داشته باشیم، قطب‌نما و تراز بسازیم و چالش iOS 13+ permission رو حل کنیم."
+enableComment: true
+---
+
+# 🧭 PWA: Device Orientation API و شتاب‌سنج/ژیروسکوپ
+
+**💡 مفهوم کلیدی**  
+دو API مرتبط برای دسترسی به سنسورهای حرکتی دستگاه:  
+- **Device Orientation API**: جهت‌گیری دستگاه نسبت به زمین (alpha, beta, gamma) → برای قطب‌نما، تراز، واقعیت افزوده.  
+- **Device Motion API**: شتاب و چرخش دستگاه (acceleration, rotationRate) → برای بازی‌ها، گام‌شمار، تشخیص تکان.
+
+**⚠️ دام رایج**  
+- فراموش کردن `DeviceOrientationEvent.requestPermission()` در iOS 13+ (بدون اون کار نمی‌کنه!).
+- عدم بررسی پشتیبانی مرورگر.
+- استفاده از داده‌های خام بدون smoothing (نویز زیاد!).
+- فراموش کردن HTTPS (این APIها فقط روی HTTPS کار می‌کنن).
+- نادیده گرفتن `prefers-reduced-motion` برای کاربران حساس.
+- عدم مدیریت خطا در دستگاه‌های بدون سنسور (مثل بعضی لپ‌تاپ‌ها).
+- استفاده از `absolute` بدون در نظر گرفتن کالیبراسیون قطب‌نما.
+
+**📏 وضعیت پشتیبانی مرورگرها**
+
+| مرورگر       | پشتیبانی | محدودیت                                  |
+|--------------|-----------|-------------------------------------------|
+| Chrome       | ✅        | فقط HTTPS + موبایل                       |
+| Safari       | ✅        | **iOS 13+ نیاز به permission داره**      |
+| Firefox      | ✅        | فقط HTTPS                                |
+| Edge         | ✅        | موبایل                                   |
+| iOS Safari   | ⚠️        | نیاز به `requestPermission()` + user gesture |
+| دسکتاپ       | ❌        | اکثر لپ‌تاپ‌ها سنسور ندارن                |
+
+> ⚠️ **نکته حیاتی**: در **iOS 13+** حتماً باید قبل از استفاده، از کاربر اجازه بگیری. این یه user gesture (کلیک) می‌خواد.
+
+**🛠️ راه‌حل سریع در کد**
+
+### ۱. هوک React برای Device Orientation
+
+```jsx
+// hooks/useDeviceOrientation.js
+import { useState, useEffect, useRef } from 'react';
+
+export function useDeviceOrientation() {
+  const [orientation, setOrientation] = useState({
+    alpha: 0,   // چرخش حول محور Z (قطب‌نما: 0-360)
+    beta: 0,    // چرخش حول محور X (جلو-عقب: -180 تا 180)
+    gamma: 0,   // چرخش حول محور Y (چپ-راست: -90 تا 90)
+    absolute: false,
+  });
+  const [isSupported, setIsSupported] = useState(false);
+  const [permission, setPermission] = useState('prompt'); // prompt | granted | denied
+  const [error, setError] = useState(null);
+  
+  // ✅ smoothing برای کاهش نویز
+  const smoothedRef = useRef({ alpha: 0, beta: 0, gamma: 0 });
+  const SMOOTHING = 0.2; // 0 تا 1 (کمتر = نرم‌تر)
+
+  useEffect(() => {
+    setIsSupported('DeviceOrientationEvent' in window);
+  }, []);
+
+  // ✅ درخواست مجوز (مخصوص iOS 13+)
+  const requestPermission = async () => {
+    if (typeof DeviceOrientationEvent?.requestPermission === 'function') {
+      try {
+        const result = await DeviceOrientationEvent.requestPermission();
+        setPermission(result);
+        return result === 'granted';
+      } catch (err) {
+        setError(err.message);
+        setPermission('denied');
+        return false;
+      }
+    }
+    // ✅ مرورگرهای دیگه نیازی به permission ندارن
+    setPermission('granted');
+    return true;
+  };
+
+  // ✅ گوش دادن به تغییرات orientation
+  useEffect(() => {
+    if (permission !== 'granted' || !isSupported) return;
+
+    const handleOrientation = (event) => {
+      const raw = {
+        alpha: event.alpha || 0,
+        beta: event.beta || 0,
+        gamma: event.gamma || 0,
+      };
+
+      // ✅ Low-pass filter برای smoothing
+      smoothedRef.current = {
+        alpha: smoothedRef.current.alpha + SMOOTHING * (raw.alpha - smoothedRef.current.alpha),
+        beta: smoothedRef.current.beta + SMOOTHING * (raw.beta - smoothedRef.current.beta),
+        gamma: smoothedRef.current.gamma + SMOOTHING * (raw.gamma - smoothedRef.current.gamma),
+      };
+
+      setOrientation({
+        ...smoothedRef.current,
+        absolute: event.absolute,
+      });
+    };
+
+    window.addEventListener('deviceorientation', handleOrientation);
+    return () => window.removeEventListener('deviceorientation', handleOrientation);
+  }, [permission, isSupported]);
+
+  return {
+    isSupported,
+    orientation,
+    permission,
+    error,
+    requestPermission,
+  };
+}
+```
+
+### ۲. هوک Device Motion (شتاب‌سنج)
+
+```jsx
+// hooks/useDeviceMotion.js
+import { useState, useEffect } from 'react';
+
+export function useDeviceMotion() {
+  const [motion, setMotion] = useState({
+    acceleration: { x: 0, y: 0, z: 0 },
+    accelerationIncludingGravity: { x: 0, y: 0, z: 0 },
+    rotationRate: { alpha: 0, beta: 0, gamma: 0 },
+    interval: 0,
+  });
+  const [isSupported, setIsSupported] = useState(false);
+  const [permission, setPermission] = useState('prompt');
+
+  useEffect(() => {
+    setIsSupported('DeviceMotionEvent' in window);
+  }, []);
+
+  const requestPermission = async () => {
+    if (typeof DeviceMotionEvent?.requestPermission === 'function') {
+      try {
+        const result = await DeviceMotionEvent.requestPermission();
+        setPermission(result);
+        return result === 'granted';
+      } catch (err) {
+        setPermission('denied');
+        return false;
+      }
+    }
+    setPermission('granted');
+    return true;
+  };
+
+  useEffect(() => {
+    if (permission !== 'granted' || !isSupported) return;
+
+    const handleMotion = (event) => {
+      setMotion({
+        acceleration: event.acceleration || { x: 0, y: 0, z: 0 },
+        accelerationIncludingGravity: event.accelerationIncludingGravity || { x: 0, y: 0, z: 0 },
+        rotationRate: event.rotationRate || { alpha: 0, beta: 0, gamma: 0 },
+        interval: event.interval,
+      });
+    };
+
+    window.addEventListener('devicemotion', handleMotion);
+    return () => window.removeEventListener('devicemotion', handleMotion);
+  }, [permission, isSupported]);
+
+  return { isSupported, motion, permission, requestPermission };
+}
+```
+
+### ۳. کامپوننت قطب‌نما
+
+```jsx
+// components/Compass.jsx
+import { useDeviceOrientation } from '@/hooks/useDeviceOrientation';
+
+export function Compass() {
+  const { isSupported, orientation, permission, requestPermission } = useDeviceOrientation();
+
+  if (!isSupported) {
+    return (
+      <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+        <p className="text-sm text-yellow-800">
+          ⚠️ سنسور جهت‌گیری در این دستگاه پشتیبانی نمیشه.
+        </p>
+      </div>
+    );
+  }
+
+  if (permission !== 'granted') {
+    return (
+      <button
+        onClick={requestPermission}
+        className="w-full bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700"
+      >
+        🧭 فعال‌سازی قطب‌نما
+      </button>
+    );
+  }
+
+  // ✅ alpha = 0 → شمال، 90 → شرق، 180 → جنوب، 270 → غرب
+  const direction = getCardinalDirection(orientation.alpha);
+
+  return (
+    <div className="flex flex-col items-center space-y-4">
+      <div className="relative w-64 h-64">
+        {/* ✅ صفحه قطب‌نما */}
+        <div className="absolute inset-0 rounded-full border-4 border-gray-300 bg-white">
+          {/* نشانه‌های جهت */}
+          <div className="absolute top-2 left-1/2 -translate-x-1/2 font-bold text-red-600">N</div>
+          <div className="absolute bottom-2 left-1/2 -translate-x-1/2 font-bold">S</div>
+          <div className="absolute left-2 top-1/2 -translate-y-1/2 font-bold">W</div>
+          <div className="absolute right-2 top-1/2 -translate-y-1/2 font-bold">E</div>
+        </div>
+
+        {/* ✅ عقربه که می‌چرخه */}
+        <div
+          className="absolute inset-0 flex items-center justify-center"
+          style={{ transform: `rotate(${-orientation.alpha}deg)` }}
+        >
+          <div className="w-1 h-28 bg-gradient-to-t from-transparent via-red-500 to-red-600 rounded-full" />
+        </div>
+
+        {/* ✅ نقطه مرکزی */}
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-4 h-4 bg-gray-800 rounded-full" />
+      </div>
+
+      <div className="text-center">
+        <p className="text-3xl font-bold">{Math.round(orientation.alpha)}°</p>
+        <p className="text-lg text-gray-600">{direction}</p>
+      </div>
+    </div>
+  );
+}
+
+function getCardinalDirection(alpha) {
+  const directions = ['شمال', 'شمال‌شرق', 'شرق', 'جنوب‌شرق', 'جنوب', 'جنوب‌غرب', 'غرب', 'شمال‌غرب'];
+  const index = Math.round(alpha / 45) % 8;
+  return directions[index];
+}
+```
+
+### ۴. کامپوننت تراز (Level)
+
+```jsx
+// components/Level.jsx
+import { useDeviceOrientation } from '@/hooks/useDeviceOrientation';
+
+export function Level() {
+  const { isSupported, orientation, permission, requestPermission } = useDeviceOrientation();
+
+  if (!isSupported) {
+    return <p>سنسور پشتیبانی نمیشه</p>;
+  }
+
+  if (permission !== 'granted') {
+    return (
+      <button onClick={requestPermission} className="bg-blue-600 text-white px-4 py-2 rounded">
+        فعال‌سازی تراز
+      </button>
+    );
+  }
+
+  // ✅ beta و gamma نشون‌دهنده‌ی کجی دستگاه هستن
+  const isLevel = Math.abs(orientation.beta) < 2 && Math.abs(orientation.gamma) < 2;
+
+  return (
+    <div className="flex flex-col items-center space-y-4">
+      {/* ✅ حباب تراز */}
+      <div className="relative w-48 h-48 rounded-full border-4 border-gray-400 bg-gradient-to-br from-green-50 to-green-100 overflow-hidden">
+        {/* دایره مرکزی (هدف) */}
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-16 h-16 rounded-full border-2 border-gray-400" />
+        
+        {/* حباب که حرکت می‌کنه */}
+        <div
+          className={`absolute top-1/2 left-1/2 w-12 h-12 rounded-full transition-colors ${
+            isLevel ? 'bg-green-500' : 'bg-red-500'
+          }`}
+          style={{
+            transform: `translate(
+              calc(-50% + ${orientation.gamma * 2}px),
+              calc(-50% + ${orientation.beta * 2}px)
+            )`,
+          }}
+        />
+      </div>
+
+      <div className="text-center">
+        <p className={`text-2xl font-bold ${isLevel ? 'text-green-600' : 'text-red-600'}`}>
+          {isLevel ? '✅ تراز' : '❌ کج'}
+        </p>
+        <p className="text-sm text-gray-600 mt-1">
+          X: {orientation.beta.toFixed(1)}° | Y: {orientation.gamma.toFixed(1)}°
+        </p>
+      </div>
+    </div>
+  );
+}
+```
+
+### ۵. تشخیص تکان (Shake Detection)
+
+```jsx
+// hooks/useShakeDetection.js
+import { useEffect, useState } from 'react';
+import { useDeviceMotion } from './useDeviceMotion';
+
+export function useShakeDetection(threshold = 15, cooldown = 1000) {
+  const { motion, permission, requestPermission } = useDeviceMotion();
+  const [shakeCount, setShakeCount] = useState(0);
+  const [lastShake, setLastShake] = useState(0);
+
+  useEffect(() => {
+    if (permission !== 'granted') return;
+
+    const { x, y, z } = motion.accelerationIncludingGravity;
+    const totalAcceleration = Math.sqrt(x * x + y * y + z * z);
+
+    // ✅ اگه شتاب ناگهانی بیشتر از threshold بود
+    if (totalAcceleration > threshold) {
+      const now = Date.now();
+      if (now - lastShake > cooldown) {
+        setShakeCount((prev) => prev + 1);
+        setLastShake(now);
+      }
+    }
+  }, [motion, threshold, cooldown, lastShake]);
+
+  return { shakeCount, requestPermission, permission };
+}
+
+// ✅ استفاده:
+function ShakeExample() {
+  const { shakeCount, requestPermission, permission } = useShakeDetection();
+
+  if (permission !== 'granted') {
+    return <button onClick={requestPermission}>فعال‌سازی تشخیص تکان</button>;
+  }
+
+  return (
+    <div className="p-4 bg-blue-50 rounded-lg">
+      <p>تعداد تکان‌ها: <strong>{shakeCount}</strong></p>
+      <p className="text-sm text-gray-600">گوشی رو تکون بده!</p>
+    </div>
+  );
+}
+```
+
+### ۶. احترام به prefers-reduced-motion
+
+```jsx
+// hooks/useReducedMotion.js
+import { useState, useEffect } from 'react';
+
+export function useReducedMotion() {
+  const [reduced, setReduced] = useState(false);
+
+  useEffect(() => {
+    const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+    setReduced(mq.matches);
+
+    const handler = (e) => setReduced(e.matches);
+    mq.addEventListener('change', handler);
+    return () => mq.removeEventListener('change', handler);
+  }, []);
+
+  return reduced;
+}
+
+// ✅ استفاده در کامپوننت
+function MotionAwareCompass() {
+  const reducedMotion = useReducedMotion();
+  const { orientation, permission, requestPermission } = useDeviceOrientation();
+
+  if (reducedMotion) {
+    return (
+      <div className="p-4 bg-gray-100 rounded-lg text-center">
+        <p>🧭 قطب‌نما به دلیل تنظیمات کاهش حرکت غیرفعال است</p>
+        <p className="text-sm text-gray-600 mt-1">جهت فعلی: شمال</p>
+      </div>
+    );
+  }
+
+  return <Compass />;
+}
+```
+
+**🔗 ابزار تست**
+
+- **Chrome DevTools** → Sensors → Orientation (شبیه‌سازی alpha/beta/gamma).
+- **DevTools** → Sensors → Motion (شبیه‌سازی شتاب و چرخش).
+- **تست واقعی**: روی موبایل HTTPS با سنسور واقعی تست کن.
+- **iOS**: تست `requestPermission()` حتماً روی iPhone واقعی.
+- **Console**: `window.addEventListener('deviceorientation', console.log)`.
+- **Android**: Settings → Developer options → Sensors برای بررسی سنسورها.
+
+**⚠️ چک‌لیست نهایی**
+
+- [ ] سایت روی HTTPS هست؟
+- [ ] `requestPermission()` برای iOS 13+ پیاده‌سازی شده؟
+- [ ] درخواست permission فقط در user gesture (کلیک) انجام میشه؟
+- [ ] smoothing برای کاهش نویز داده‌ها اعمال شده؟
+- [ ] احترام به `prefers-reduced-motion`؟
+- [ ] Fallback برای دستگاه‌های بدون سنسور؟
+- [ ] مدیریت خطا در مرورگرهای بدون پشتیبانی؟
+- [ ] cleanup در unmount کامپوننت؟
+- [ ] تست در iOS Safari واقعی؟
+- [ ] تست در Android Chrome واقعی؟
+
+> **قانون ۳ ثانیه‌ای:** DevTools → Sensors → Orientation رو باز کن، alpha رو روی 90 بذار. آیا عقربه قطب‌نما به شرق اشاره می‌کنه؟ بعد beta رو روی 45 بذار؛ آیا حباب تراز به سمتی کج میشه؟ بعد Safari روی iPhone رو تست کن؛ آیا دکمه "فعال‌سازی" برای permission ظاهر میشه؟ اگر نه، یعنی iOS support نداری!
