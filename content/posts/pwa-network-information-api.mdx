@@ -1,0 +1,300 @@
+---
+title: "PWA: Network Information API و تشخیص نوع اتصال"
+date: '2026-09-29'
+playlist: 'PWA - برنامه وب پیشرونده'
+tags: ['PWA', 'Network-Information-API', 'Connection-Type', 'Performance', 'Adaptive-UX', 'React']
+description: "چطور با Network Information API نوع اتصال کاربر (4G, WiFi, 3G) رو تشخیص بدیم، UX رو بر اساس سرعت شبکه تطبیق بدیم و مصرف داده رو بهینه کنیم."
+enableComment: true
+---
+
+# 📡 PWA: Network Information API و تشخیص نوع اتصال
+
+**💡 مفهوم کلیدی**  
+Network Information API به سایت اجازه میده **نوع اتصال شبکه** (4G, WiFi, 3G, 2G)، **سرعت تقریبی** (downlink) و **وضعیت ذخیره‌ی داده** (Data Saver) کاربر رو تشخیص بده. با این اطلاعات می‌تونی UX رو هوشمند کنی: در شبکه ضعیف کیفیت ویدیو رو کاهش بدی، تصاویر با کیفیت پایین‌تر لود کنی، یا prefetch رو غیرفعال کنی.
+
+**⚠️ دام رایج**  
+- استفاده بدون fallback برای مرورگرهای بدون پشتیبانی (Safari, Firefox).
+- تکیه بر `effectiveType` برای تصمیم‌گیری قطعی (این یه تخمین هست، نه اندازه‌گیری دقیق!).
+- عدم گوش دادن به `change` event (وقتی کاربر از WiFi به 4G سوئیچ می‌کنه).
+- استفاده برای fingerprinting یا محدود کردن دسترسی (غیراخلاقی).
+- عدم احترام به `saveData` (کاربر صریحاً گفته داده کم مصرف کن!).
+- نادیده گرفتن اینکه این API فقط در Chromium کار می‌کنه.
+
+**📏 وضعیت پشتیبانی مرورگرها (خیلی محدود!)**
+
+| مرورگر       | پشتیبانی | محدودیت                                  |
+|--------------|-----------|-------------------------------------------|
+| Chrome       | ✅        | فقط HTTPS + Chromium                     |
+| Edge         | ✅        | Chromium-based                           |
+| Opera        | ✅        | Chromium-based                           |
+| Samsung      | ✅        | کامل                                     |
+| Safari       | ❌        | **پشتیبانی نمیشه**                        |
+| iOS Safari   | ❌        | پشتیبانی نمیشه                            |
+| Firefox      | ❌        | **پشتیبانی نمیشه** (flag لازم)            |
+
+> ⚠️ **نکته حیاتی**: این API فقط در مرورگرهای **Chromium-based** کار می‌کنه. همیشه fallback بذار!
+
+**🛠️ راه‌حل سریع در کد**
+
+### ۱. هوک React برای مدیریت Network Information
+
+```jsx
+// hooks/useNetworkInformation.js
+import { useState, useEffect } from 'react';
+
+export function useNetworkInformation() {
+  const [connection, setConnection] = useState({
+    isSupported: false,
+    effectiveType: 'unknown', // 4g | 3g | 2g | slow-2g | unknown
+    downlink: 0,              // Mbps (تخمینی)
+    rtt: 0,                   // milliseconds (تخمینی)
+    saveData: false,          // Data Saver mode
+    type: 'unknown',          // wifi | cellular | ethernet | unknown
+  });
+
+  useEffect(() => {
+    const updateConnection = () => {
+      if ('connection' in navigator) {
+        const conn = navigator.connection;
+        setConnection({
+          isSupported: true,
+          effectiveType: conn.effectiveType || 'unknown',
+          downlink: conn.downlink || 0,
+          rtt: conn.rtt || 0,
+          saveData: conn.saveData || false,
+          type: conn.type || 'unknown',
+        });
+      } else {
+        setConnection({
+          isSupported: false,
+          effectiveType: 'unknown',
+          downlink: 0,
+          rtt: 0,
+          saveData: false,
+          type: 'unknown',
+        });
+      }
+    };
+
+    updateConnection();
+
+    // ✅ گوش دادن به تغییر نوع اتصال
+    if ('connection' in navigator) {
+      const conn = navigator.connection;
+      conn.addEventListener('change', updateConnection);
+
+      return () => {
+        conn.removeEventListener('change', updateConnection);
+      };
+    }
+  }, []);
+
+  return connection;
+}
+```
+
+### ۲. کامپوننت نمایش وضعیت شبکه
+
+```jsx
+// components/NetworkStatus.jsx
+import { useNetworkInformation } from '@/hooks/useNetworkInformation';
+
+export function NetworkStatus() {
+  const { isSupported, effectiveType, downlink, rtt, saveData, type } = useNetworkInformation();
+
+  if (!isSupported) {
+    return (
+      <div className="p-3 bg-gray-50 rounded-lg text-sm text-gray-600">
+        ⚠️ Network Information API پشتیبانی نمیشه
+      </div>
+    );
+  }
+
+  const getSpeedLabel = (type) => {
+    switch (type) {
+      case '4g': return { label: 'سریع', color: 'green' };
+      case '3g': return { label: 'متوسط', color: 'yellow' };
+      case '2g': return { label: 'کند', color: 'orange' };
+      case 'slow-2g': return { label: 'خیلی کند', color: 'red' };
+      default: return { label: 'نامشخص', color: 'gray' };
+    }
+  };
+
+  const speedInfo = getSpeedLabel(effectiveType);
+
+  return (
+    <div className="p-4 bg-white border border-gray-200 rounded-lg space-y-2">
+      <div className="flex items-center justify-between">
+        <p className="font-medium">وضعیت شبکه:</p>
+        <span className={`px-3 py-1 rounded-full text-xs font-medium bg-${speedInfo.color}-100 text-${speedInfo.color}-800`}>
+          {speedInfo.label}
+        </span>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2 text-sm">
+        <div>
+          <span className="text-gray-600">نوع اتصال:</span>
+          <p className="font-medium">{type}</p>
+        </div>
+        <div>
+          <span className="text-gray-600">سرعت تقریبی:</span>
+          <p className="font-medium">{downlink} Mbps</p>
+        </div>
+        <div>
+          <span className="text-gray-600">تأخیر (RTT):</span>
+          <p className="font-medium">{rtt} ms</p>
+        </div>
+        <div>
+          <span className="text-gray-600">Data Saver:</span>
+          <p className="font-medium">{saveData ? '✅ فعال' : '❌ غیرفعال'}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+```
+
+### ۳. تطبیق کیفیت ویدیو بر اساس شبکه
+
+```jsx
+// components/AdaptiveVideo.jsx
+import { useNetworkInformation } from '@/hooks/useNetworkInformation';
+
+export function AdaptiveVideo({ videoUrl }) {
+  const { effectiveType, saveData } = useNetworkInformation();
+
+  // ✅ انتخاب کیفیت بر اساس نوع اتصال
+  const getVideoQuality = () => {
+    if (saveData) return 'low'; // Data Saver فعاله
+    if (effectiveType === '4g') return 'high';
+    if (effectiveType === '3g') return 'medium';
+    if (effectiveType === '2g' || effectiveType === 'slow-2g') return 'low';
+    return 'medium';
+  };
+
+  const quality = getVideoQuality();
+
+  const videoSources = {
+    high: `${videoUrl}_1080p.mp4`,
+    medium: `${videoUrl}_720p.mp4`,
+    low: `${videoUrl}_480p.mp4`,
+  };
+
+  return (
+    <div className="space-y-2">
+      <video controls className="w-full rounded-lg">
+        <source src={videoSources[quality]} type="video/mp4" />
+        مرورگر شما از ویدیو پشتیبانی نمی‌کنه.
+      </video>
+      <p className="text-xs text-gray-600">
+        کیفیت: {quality === 'high' ? '1080p' : quality === 'medium' ? '720p' : '480p'}
+        {saveData && ' (Data Saver فعال)'}
+      </p>
+    </div>
+  );
+}
+```
+
+### ۴. بهینه‌سازی تصاویر بر اساس شبکه
+
+```jsx
+// components/AdaptiveImage.jsx
+import { useNetworkInformation } from '@/hooks/useNetworkInformation';
+
+export function AdaptiveImage({ src, alt, sizes }) {
+  const { effectiveType, downlink, saveData } = useNetworkInformation();
+
+  // ✅ انتخاب فرمت و کیفیت تصویر
+  const shouldUseWebP = effectiveType === '4g' && downlink > 1.5;
+  const shouldLazyLoad = effectiveType !== '4g' || saveData;
+
+  const imageSrc = shouldUseWebP ? `${src}.webp` : `${src}.jpg`;
+
+  return (
+    <img
+      src={imageSrc}
+      alt={alt}
+      loading={shouldLazyLoad ? 'lazy' : 'eager'}
+      className="w-full rounded-lg"
+    />
+  );
+}
+```
+
+### ۵. غیرفعال کردن Prefetch در شبکه ضعیف
+
+```jsx
+// hooks/useAdaptivePrefetch.js
+import { useNetworkInformation } from './useNetworkInformation';
+
+export function useAdaptivePrefetch() {
+  const { effectiveType, saveData } = useNetworkInformation();
+
+  const shouldPrefetch = effectiveType === '4g' && !saveData;
+
+  return {
+    shouldPrefetch,
+    prefetchLinks: (urls) => {
+      if (!shouldPrefetch) return;
+
+      urls.forEach((url) => {
+        const link = document.createElement('link');
+        link.rel = 'prefetch';
+        link.href = url;
+        document.head.appendChild(link);
+      });
+    },
+  };
+}
+```
+
+### ۶. هشدار به کاربر در شبکه ضعیف
+
+```jsx
+// components/SlowNetworkWarning.jsx
+import { useNetworkInformation } from '@/hooks/useNetworkInformation';
+
+export function SlowNetworkWarning() {
+  const { isSupported, effectiveType, saveData } = useNetworkInformation();
+
+  if (!isSupported) return null;
+  if (effectiveType === '4g' || effectiveType === '3g') return null;
+  if (saveData) return null;
+
+  return (
+    <div 
+      role="alert"
+      className="fixed bottom-4 left-4 right-4 md:left-auto md:right-4 md:w-80 
+                 p-4 bg-orange-50 border border-orange-200 rounded-lg shadow-lg"
+    >
+      <p className="font-medium text-orange-800">⚠️ اتصال اینترنت کند است</p>
+      <p className="text-sm text-orange-700 mt-1">
+        ممکن است بارگذاری صفحات کمی طول بکشد. برای تجربه بهتر، از اتصال سریع‌تر استفاده کنید.
+      </p>
+    </div>
+  );
+}
+```
+
+**🔗 ابزار تست**
+
+- **Chrome DevTools** → Network → Throttling (شبیه‌سازی 3G, 4G, Offline).
+- **DevTools** → Sensors → Network (تغییر نوع اتصال).
+- **Console**: `navigator.connection` برای مشاهده اطلاعات اتصال.
+- **تست واقعی**: روی موبایل با WiFi و 4G تست کن.
+- **Data Saver**: در تنظیمات اندروید Data Saver رو فعال کن و ببین `saveData` تغییر می‌کنه.
+- **Safari/Firefox**: تست کن که fallback درست کار می‌کنه.
+
+**⚠️ چک‌لیست نهایی**
+
+- [ ] بررسی پشتیبانی مرورگر قبل از استفاده؟
+- [ ] گوش دادن به `change` event برای تشخیص تغییر نوع اتصال؟
+- [ ] احترام به `saveData` (Data Saver mode)؟
+- [ ] استفاده برای بهینه‌سازی (نه محدود کردن دسترسی)؟
+- [ ] Fallback برای مرورگرهای بدون پشتیبانی؟
+- [ ] عدم استفاده برای fingerprinting؟
+- [ ] تست در Chrome DevTools → Network → Throttling؟
+- [ ] تست در Data Saver mode؟
+- [ ] تست تغییر نوع اتصال (WiFi ↔ 4G)؟
+
+> **قانون ۳ ثانیه‌ای:** DevTools → Network → Throttling رو باز کن، روی "Fast 3G" بذار و صفحه رو رفرش کن. آیا اپ شما واکنشی نشون میده (کاهش کیفیت ویدیو، غیرفعال کردن prefetch، نمایش هشدار)؟ بعد Data Saver رو در تنظیمات اندروید فعال کن؛ آیا `saveData` برابر `true` میشه؟ اگر نه، یعنی API رو درست پیاده‌سازی نکردی!
