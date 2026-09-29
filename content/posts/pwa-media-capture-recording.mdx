@@ -1,0 +1,674 @@
+---
+title: "PWA: Media Capture و ضبط صدا/تصویر با دوربین"
+date: '2026-09-29'
+playlist: 'PWA - برنامه وب پیشرونده'
+tags: ['PWA', 'Media-Capture', 'MediaRecorder', 'Camera', 'Microphone', 'Recording', 'React', 'Blob']
+description: "چطور با MediaRecorder API ویدیو و صدا رو در مرورگر ضبط کنیم، Blob بسازیم، دانلود کنیم و چالش فرمت‌ها رو حل کنیم."
+enableComment: true
+---
+
+# 🎬 PWA: Media Capture و ضبط صدا/تصویر با دوربین
+
+**💡 مفهوم کلیدی**  
+Media Capture API (شامل `MediaRecorder` و `capture` attribute) به سایت اجازه میده **ویدیو، صدا و عکس** رو مستقیماً از دوربین و میکروفون ضبط کنه. برای اپ‌های پیام‌رسان صوتی، ضبط ویدیوی پروفایل، اپ‌های آموزشی و استوری‌ها حیاتیه.
+
+**⚠️ دام رایج**  
+- فراموش کردن `getUserMedia` قبل از `MediaRecorder` (بدون stream، ضبط کار نمی‌کنه!).
+- عدم بررسی `MediaRecorder.isTypeSupported()` (بعضی مرورگرها `video/mp4` رو پشتیبانی نمی‌کنن!).
+- عدم مدیریت `ondataavailable` و `onstop` events.
+- فراموش کردن cleanup (قطع stream بعد از ضبط).
+- عدم ارائه‌ی preview قبل از ذخیره.
+- استفاده از `capture` attribute بدون fallback برای دسکتاپ.
+- نادیده گرفتن مجوزهای مرورگر (Permission).
+- عدم مدیریت زمان ضبط (کاربر فراموش می‌کنه stop بزنه).
+
+**📏 وضعیت پشتیبانی مرورگرها**
+
+| مرورگر       | MediaRecorder | `capture` attribute | فرمت‌های پشتیبانی |
+|--------------|---------------|----------------------|-------------------|
+| Chrome       | ✅            | ✅                   | webm, ogg        |
+| Firefox      | ✅            | ✅                   | webm, ogg        |
+| Safari       | ✅ (14.1+)    | ✅                   | mp4 (محدود)      |
+| Edge         | ✅            | ✅                   | webm, mp4        |
+| iOS Safari   | ✅ (14.3+)    | ✅                   | mp4              |
+| Samsung      | ✅            | ✅                   | webm, mp4        |
+
+> ⚠️ **نکته حیاتی**: فرمت `video/mp4` فقط در Safari و بعضی نسخه‌های Edge پشتیبانی میشه. همیشه `isTypeSupported()` رو چک کن!
+
+**🛠️ راه‌حل سریع در کد**
+
+### ۱. هوک React برای ضبط ویدیو
+
+```jsx
+// hooks/useVideoRecorder.js
+import { useState, useRef, useCallback, useEffect } from 'react';
+
+export function useVideoRecorder() {
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordedBlob, setRecordedBlob] = useState(null);
+  const [recordedUrl, setRecordedUrl] = useState(null);
+  const [duration, setDuration] = useState(0);
+  const [error, setError] = useState(null);
+  const [isSupported, setIsSupported] = useState(false);
+  
+  const mediaRecorderRef = useRef(null);
+  const streamRef = useRef(null);
+  const chunksRef = useRef([]);
+  const timerRef = useRef(null);
+
+  useEffect(() => {
+    setIsSupported(
+      'MediaRecorder' in window &&
+      'mediaDevices' in navigator &&
+      'getUserMedia' in navigator.mediaDevices
+    );
+  }, []);
+
+  // ✅ انتخاب بهترین فرمت پشتیبانی‌شده
+  const getSupportedMimeType = () => {
+    const types = [
+      'video/webm;codecs=vp9',
+      'video/webm;codecs=vp8',
+      'video/webm',
+      'video/mp4',
+      'video/ogg',
+    ];
+    
+    for (const type of types) {
+      if (MediaRecorder.isTypeSupported(type)) {
+        return type;
+      }
+    }
+    return '';
+  };
+
+  // ✅ شروع ضبط
+  const startRecording = useCallback(async () => {
+    if (!isSupported) {
+      setError('ضبط ویدیو در این مرورگر پشتیبانی نمیشه');
+      return;
+    }
+
+    try {
+      setError(null);
+      chunksRef.current = [];
+
+      // ✅ درخواست دسترسی به دوربین و میکروفون
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { 
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          facingMode: 'user', // دوربین جلو
+        },
+        audio: true,
+      });
+
+      streamRef.current = stream;
+
+      // ✅ شروع MediaRecorder
+      const mimeType = getSupportedMimeType();
+      const mediaRecorder = new MediaRecorder(stream, {
+        mimeType: mimeType || undefined,
+        videoBitsPerSecond: 2500000, // 2.5 Mbps
+      });
+
+      mediaRecorderRef.current = mediaRecorder;
+
+      // ✅ جمع‌آوری chunks
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          chunksRef.current.push(event.data);
+        }
+      };
+
+      // ✅ پایان ضبط
+      mediaRecorder.onstop = () => {
+        const blob = new Blob(chunksRef.current, {
+          type: mimeType || 'video/webm',
+        });
+        const url = URL.createObjectURL(blob);
+        
+        setRecordedBlob(blob);
+        setRecordedUrl(url);
+        setIsRecording(false);
+
+        // ✅ قطع stream
+        stream.getTracks().forEach(track => track.stop());
+      };
+
+      // ✅ شروع ضبط
+      mediaRecorder.start(1000); // هر ۱ ثانیه یه chunk
+      setIsRecording(true);
+      setDuration(0);
+
+      // ✅ تایمر
+      timerRef.current = setInterval(() => {
+        setDuration((prev) => prev + 1);
+      }, 1000);
+
+    } catch (err) {
+      if (err.name === 'NotAllowedError') {
+        setError('دسترسی به دوربین/میکروفون رد شد');
+      } else if (err.name === 'NotFoundError') {
+        setError('دوربین یا میکروفون پیدا نشد');
+      } else {
+        setError(err.message);
+      }
+    }
+  }, [isSupported]);
+
+  // ✅ توقف ضبط
+  const stopRecording = useCallback(() => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+      clearInterval(timerRef.current);
+    }
+  }, [isRecording]);
+
+  // ✅ حذف ضبط
+  const discardRecording = useCallback(() => {
+    if (recordedUrl) {
+      URL.revokeObjectURL(recordedUrl);
+    }
+    setRecordedBlob(null);
+    setRecordedUrl(null);
+    setDuration(0);
+  }, [recordedUrl]);
+
+  // ✅ دانلود ضبط
+  const downloadRecording = useCallback((filename = 'recording.webm') => {
+    if (!recordedBlob) return;
+
+    const a = document.createElement('a');
+    a.href = recordedUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  }, [recordedBlob, recordedUrl]);
+
+  // ✅ cleanup
+  useEffect(() => {
+    return () => {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
+      }
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+      }
+      if (recordedUrl) {
+        URL.revokeObjectURL(recordedUrl);
+      }
+    };
+  }, []);
+
+  return {
+    isSupported,
+    isRecording,
+    recordedBlob,
+    recordedUrl,
+    duration,
+    error,
+    startRecording,
+    stopRecording,
+    discardRecording,
+    downloadRecording,
+  };
+}
+```
+
+### ۲. کامپوننت ضبط ویدیو
+
+```jsx
+// components/VideoRecorder.jsx
+import { useRef, useEffect } from 'react';
+import { useVideoRecorder } from '@/hooks/useVideoRecorder';
+
+export function VideoRecorder() {
+  const videoPreviewRef = useRef(null);
+  const {
+    isSupported,
+    isRecording,
+    recordedUrl,
+    duration,
+    error,
+    startRecording,
+    stopRecording,
+    discardRecording,
+    downloadRecording,
+  } = useVideoRecorder();
+
+  // ✅ نمایش preview زنده
+  useEffect(() => {
+    if (videoPreviewRef.current && isRecording) {
+      // stream از hook نمیاد، باید دوباره بگیریم یا از hook اصلاح کنیم
+      // اینجا فقط placeholder هست
+    }
+  }, [isRecording]);
+
+  if (!isSupported) {
+    return (
+      <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+        <p className="text-sm text-yellow-800">
+          ⚠️ ضبط ویدیو در این مرورگر پشتیبانی نمیشه.
+        </p>
+      </div>
+    );
+  }
+
+  const formatDuration = (seconds) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  return (
+    <div className="space-y-4 max-w-lg mx-auto">
+      <h2 className="text-xl font-bold">🎬 ضبط ویدیو</h2>
+
+      {/* ✅ Preview ویدیو */}
+      <div className="relative aspect-video bg-black rounded-lg overflow-hidden">
+        {recordedUrl ? (
+          <video
+            src={recordedUrl}
+            controls
+            className="w-full h-full object-cover"
+          />
+        ) : (
+          <div className="flex items-center justify-center h-full text-white">
+            {isRecording ? (
+              <div className="text-center">
+                <div className="w-16 h-16 border-4 border-red-500 rounded-full animate-pulse mx-auto mb-2" />
+                <p className="text-2xl font-mono">{formatDuration(duration)}</p>
+              </div>
+            ) : (
+              <p>آماده برای ضبط</p>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* ✅ دکمه‌های کنترل */}
+      <div className="flex gap-2">
+        {!isRecording && !recordedUrl && (
+          <button
+            onClick={startRecording}
+            className="flex-1 bg-red-600 text-white px-6 py-3 rounded-lg 
+                       hover:bg-red-700 transition-colors font-medium
+                       flex items-center justify-center gap-2"
+          >
+            <div className="w-4 h-4 bg-white rounded-full" />
+            شروع ضبط
+          </button>
+        )}
+
+        {isRecording && (
+          <button
+            onClick={stopRecording}
+            className="flex-1 bg-gray-800 text-white px-6 py-3 rounded-lg 
+                       hover:bg-gray-900 transition-colors font-medium
+                       flex items-center justify-center gap-2"
+          >
+            <div className="w-4 h-4 bg-white rounded-sm" />
+            توقف ضبط
+          </button>
+        )}
+
+        {recordedUrl && !isRecording && (
+          <>
+            <button
+              onClick={discardRecording}
+              className="flex-1 bg-gray-200 text-gray-800 px-6 py-3 rounded-lg 
+                         hover:bg-gray-300 transition-colors font-medium"
+            >
+              🗑️ حذف
+            </button>
+            <button
+              onClick={() => downloadRecording(`video-${Date.now()}.webm`)}
+              className="flex-1 bg-green-600 text-white px-6 py-3 rounded-lg 
+                         hover:bg-green-700 transition-colors font-medium"
+            >
+              💾 دانلود
+            </button>
+          </>
+        )}
+      </div>
+
+      {error && (
+        <div role="alert" className="p-3 bg-red-50 border border-red-200 rounded-lg">
+          <p className="text-sm text-red-800">{error}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+### ۳. هوک ضبط صدا (Voice Recorder)
+
+```jsx
+// hooks/useAudioRecorder.js
+import { useState, useRef, useCallback, useEffect } from 'react';
+
+export function useAudioRecorder() {
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordedBlob, setRecordedBlob] = useState(null);
+  const [recordedUrl, setRecordedUrl] = useState(null);
+  const [duration, setDuration] = useState(0);
+  const [error, setError] = useState(null);
+  
+  const mediaRecorderRef = useRef(null);
+  const streamRef = useRef(null);
+  const chunksRef = useRef([]);
+  const timerRef = useRef(null);
+
+  const startRecording = useCallback(async () => {
+    try {
+      setError(null);
+      chunksRef.current = [];
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          sampleRate: 44100,
+        },
+      });
+
+      streamRef.current = stream;
+
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : 'audio/webm';
+
+      const mediaRecorder = new MediaRecorder(stream, { mimeType });
+      mediaRecorderRef.current = mediaRecorder;
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          chunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorder.onstop = () => {
+        const blob = new Blob(chunksRef.current, { type: mimeType });
+        const url = URL.createObjectURL(blob);
+        
+        setRecordedBlob(blob);
+        setRecordedUrl(url);
+        setIsRecording(false);
+
+        stream.getTracks().forEach(track => track.stop());
+      };
+
+      mediaRecorder.start(100);
+      setIsRecording(true);
+      setDuration(0);
+
+      timerRef.current = setInterval(() => {
+        setDuration((prev) => prev + 1);
+      }, 1000);
+
+    } catch (err) {
+      setError(err.name === 'NotAllowedError' 
+        ? 'دسترسی به میکروفون رد شد' 
+        : err.message);
+    }
+  }, []);
+
+  const stopRecording = useCallback(() => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+      clearInterval(timerRef.current);
+    }
+  }, [isRecording]);
+
+  const discardRecording = useCallback(() => {
+    if (recordedUrl) URL.revokeObjectURL(recordedUrl);
+    setRecordedBlob(null);
+    setRecordedUrl(null);
+    setDuration(0);
+  }, [recordedUrl]);
+
+  const downloadRecording = useCallback((filename = 'audio.webm') => {
+    if (!recordedBlob) return;
+    const a = document.createElement('a');
+    a.href = recordedUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  }, [recordedBlob, recordedUrl]);
+
+  useEffect(() => {
+    return () => {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
+      }
+      if (timerRef.current) clearInterval(timerRef.current);
+      if (recordedUrl) URL.revokeObjectURL(recordedUrl);
+    };
+  }, []);
+
+  return {
+    isRecording,
+    recordedBlob,
+    recordedUrl,
+    duration,
+    error,
+    startRecording,
+    stopRecording,
+    discardRecording,
+    downloadRecording,
+  };
+}
+```
+
+### ۴. کامپوننت ضبط صدا (Voice Message)
+
+```jsx
+// components/VoiceRecorder.jsx
+import { useAudioRecorder } from '@/hooks/useAudioRecorder';
+
+export function VoiceRecorder() {
+  const {
+    isRecording,
+    recordedUrl,
+    duration,
+    error,
+    startRecording,
+    stopRecording,
+    discardRecording,
+    downloadRecording,
+  } = useAudioRecorder();
+
+  const formatDuration = (seconds) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  return (
+    <div className="p-4 bg-white border border-gray-200 rounded-lg space-y-3">
+      <h3 className="font-bold">🎤 ضبط پیام صوتی</h3>
+
+      {/* ✅ نمایش وضعیت */}
+      {isRecording && (
+        <div className="flex items-center gap-2 p-3 bg-red-50 rounded-lg">
+          <div className="w-3 h-3 bg-red-500 rounded-full animate-pulse" />
+          <span className="font-mono text-red-700">{formatDuration(duration)}</span>
+        </div>
+      )}
+
+      {/* ✅ پخش ضبط */}
+      {recordedUrl && (
+        <audio src={recordedUrl} controls className="w-full" />
+      )}
+
+      {/* ✅ دکمه‌ها */}
+      <div className="flex gap-2">
+        {!isRecording && !recordedUrl && (
+          <button
+            onClick={startRecording}
+            className="flex-1 bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700"
+          >
+            🎙️ شروع ضبط
+          </button>
+        )}
+
+        {isRecording && (
+          <button
+            onClick={stopRecording}
+            className="flex-1 bg-gray-800 text-white px-4 py-2 rounded-lg hover:bg-gray-900"
+          >
+            ⏹️ توقف
+          </button>
+        )}
+
+        {recordedUrl && !isRecording && (
+          <>
+            <button
+              onClick={discardRecording}
+              className="flex-1 bg-gray-200 px-4 py-2 rounded-lg hover:bg-gray-300"
+            >
+              🗑️ حذف
+            </button>
+            <button
+              onClick={() => downloadRecording(`voice-${Date.now()}.webm`)}
+              className="flex-1 bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700"
+            >
+              📤 ارسال
+            </button>
+          </>
+        )}
+      </div>
+
+      {error && (
+        <p className="text-sm text-red-600">{error}</p>
+      )}
+    </div>
+  );
+}
+```
+
+### ۵. `capture` attribute برای آپلود مستقیم
+
+```jsx
+// ✅ روش ساده: باز کردن مستقیم دوربین برای عکس/ویدیو
+function SimpleCapture() {
+  return (
+    <div className="space-y-4">
+      {/* ✅ عکس با دوربین پشت */}
+      <input
+        type="file"
+        accept="image/*"
+        capture="environment"
+        className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 
+                   file:rounded-full file:border-0 file:text-sm file:font-semibold 
+                   file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
+      />
+
+      {/* ✅ ویدیو با دوربین جلو */}
+      <input
+        type="file"
+        accept="video/*"
+        capture="user"
+        className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 
+                   file:rounded-full file:border-0 file:text-sm file:font-semibold 
+                   file:bg-green-50 file:text-green-700 hover:file:bg-green-100"
+      />
+
+      {/* ✅ صدا فقط */}
+      <input
+        type="file"
+        accept="audio/*"
+        capture="user"
+        className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 
+                   file:rounded-full file:border-0 file:text-sm file:font-semibold 
+                   file:bg-purple-50 file:text-purple-700 hover:file:bg-purple-100"
+      />
+    </div>
+  );
+}
+```
+
+### ۶. آپلود به سرور
+
+```jsx
+// hooks/useUploadRecording.js
+import { useState } from 'react';
+
+export function useUploadRecording() {
+  const [uploading, setUploading] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [error, setError] = useState(null);
+
+  const upload = async (blob, filename) => {
+    if (!blob) return null;
+
+    setUploading(true);
+    setError(null);
+    setProgress(0);
+
+    try {
+      const formData = new FormData();
+      formData.append('recording', blob, filename);
+
+      const xhr = new XMLHttpRequest();
+      
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable) {
+          setProgress(Math.round((event.loaded / event.total) * 100));
+        }
+      };
+
+      const response = await new Promise((resolve, reject) => {
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            resolve(JSON.parse(xhr.responseText));
+          } else {
+            reject(new Error('Upload failed'));
+          }
+        };
+        xhr.onerror = () => reject(new Error('Network error'));
+        xhr.open('POST', '/api/upload');
+        xhr.send(formData);
+      });
+
+      setUploading(false);
+      return response;
+    } catch (err) {
+      setError(err.message);
+      setUploading(false);
+      return null;
+    }
+  };
+
+  return { upload, uploading, progress, error };
+}
+```
+
+**🔗 ابزار تست**
+
+- **Chrome DevTools** → Media (شبیه‌سازی دوربین و میکروفون).
+- **Application** → Permissions → بررسی مجوزها.
+- **Console**: `MediaRecorder.isTypeSupported('video/webm')` برای بررسی فرمت.
+- **تست واقعی**: روی موبایل HTTPS با دوربین واقعی تست کن.
+- **iOS Safari**: تست `capture` attribute روی iPhone.
+- **VLC Player**: برای پخش فایل‌های webm ضبط‌شده.
+
+**⚠️ چک‌لیست نهایی**
+
+- [ ] بررسی `MediaRecorder.isTypeSupported()` قبل از ضبط؟
+- [ ] مدیریت `ondataavailable` و `onstop` events؟
+- [ ] cleanup stream بعد از ضبط (`track.stop()`)?
+- [ ] `URL.revokeObjectURL()` بعد از دانلود یا حذف؟
+- [ ] مدیریت خطاهای `NotAllowedError` و `NotFoundError`؟
+- [ ] ارائه‌ی preview قبل از ذخیره؟
+- [ ] استفاده از `capture` attribute برای موبایل؟
+- [ ] نمایش duration به کاربر؟
+- [ ] تست در iOS Safari (فرمت mp4)?
+- [ ] تست در Chrome (فرمت webm)?
+- [ ] احترام به حریم خصوصی (توضیح چرا ضبط می‌کنی)?
+
+> **قانون ۳ ثانیه‌ای:** دکمه "شروع ضبط" رو بزن، ۵ ثانیه ضبط کن و stop بزن. آیا preview ویدیو/صدا نمایش داده میشه؟ بعد دانلود کن و با VLC پخش کن؛ آیا فایل سالمه؟ بعد Safari روی iPhone رو تست کن؛ آیا `capture` attribute دوربین رو مستقیم باز می‌کنه؟ اگر نه، یعنی API رو درست پیاده‌سازی نکردی!
