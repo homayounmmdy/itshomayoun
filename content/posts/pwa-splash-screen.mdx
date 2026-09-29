@@ -1,0 +1,324 @@
+---
+title: "PWA: صفحه‌ی شروع سفارشی (Splash Screen)"
+date: '2026-09-29'
+playlist: 'PWA - برنامه وب پیشرونده'
+tags: ['PWA', 'Splash-Screen', 'Web-App-Manifest', 'iOS', 'Branding', 'UX', 'React']
+description: "چطور Splash Screen حرفه‌ای برای PWA بسازیم، چرا iOS به meta tags جدا نیاز داره و چطور با ابزارهای خودکار همه‌ی سایزها رو تولید کنیم."
+enableComment: true
+---
+
+# 🚀 PWA: صفحه‌ی شروع سفارشی (Splash Screen)
+
+**💡 مفهوم کلیدی**  
+Splash Screen اون صفحه‌ی اولیه‌ای هست که وقتی کاربر PWA رو از هوم اسکرین باز می‌کنه، **قبل از لود شدن کامل اپ** نمایش داده میشه. یه Splash Screen خوب حس **اپلیکیشن بومی** رو تقویت می‌کنه، برند رو نشون میده و تجربه‌ی لود شدن رو نرم‌تر می‌کنه.
+
+**⚠️ دام رایج**  
+- فراموش کردن `background_color` در manifest (بدون اون، صفحه سفید یا سیاه نشون داده میشه).
+- عدم ارائه‌ی splash screen برای iOS (Safari manifest رو کامل نمی‌خونه!).
+- استفاده از یه سایز ثابت برای همه‌ی دستگاه‌ها (در iPad یا دسکتاپ زشت دیده میشه).
+- قرار دادن متن/لوگوی کوچک که در دستگاه‌های بزرگ گم میشه.
+- نادیده گرفتن Dark Mode (splash screen سفید در تم تاریک چشم رو می‌زنه).
+- فراموش کردن `theme-color` (نوار وضعیت رنگ اشتباه می‌گیره).
+- عدم تست روی دستگاه‌های واقعی با اندازه‌های مختلف.
+
+**📏 اجزای Splash Screen**
+
+| مرورگر/سیستم       | منبع Splash Screen                  |
+|--------------------|--------------------------------------|
+| Chrome Android     | `manifest.json` → `icons` + `background_color` |
+| Chrome Desktop     | `manifest.json` → `icons` + `background_color` |
+| Safari iOS         | `apple-touch-startup-image` meta tags |
+| Edge               | `manifest.json`                      |
+| Samsung            | `manifest.json`                      |
+
+> ⚠️ **نکته حیاتی**: iOS Safari **manifest رو برای splash screen نمی‌خونه**! باید `apple-touch-startup-image` با سایزهای خاص هر دستگاه اضافه کنی.
+
+**🛠️ راه‌حل سریع در کد**
+
+### ۱. تنظیمات manifest.json
+
+```json
+// public/manifest.json
+{
+  "name": "فروشگاه من",
+  "short_name": "فروشگاه",
+  "start_url": "/?utm_source=pwa",
+  "display": "standalone",
+  "orientation": "portrait",
+  
+  // ✅ رنگ‌های Splash Screen
+  "background_color": "#ffffff",  // پس‌زمینه صفحه شروع
+  "theme_color": "#2563eb",       // رنگ نوار وضعیت
+  
+  // ✅ آیکون‌ها (Splash از بزرگترین آیکون any استفاده می‌کنه)
+  "icons": [
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}
+```
+
+### ۲. Meta tags برای iOS (حیاتی!)
+
+```html
+<!-- در <head> -->
+
+<!-- ✅ آیکون اپ در هوم اسکرین iOS -->
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon-180.png" />
+
+<!-- ✅ Splash Screen برای iOS (سایزهای مختلف) -->
+<!-- iPhone 14 Pro Max (1290×2796) -->
+<link 
+  rel="apple-touch-startup-image" 
+  href="/splash/iphone-14-pro-max.png"
+  media="(device-width: 430px) and (device-height: 932px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)"
+/>
+
+<!-- iPhone 14 Pro (1179×2556) -->
+<link 
+  rel="apple-touch-startup-image" 
+  href="/splash/iphone-14-pro.png"
+  media="(device-width: 393px) and (device-height: 852px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)"
+/>
+
+<!-- iPhone 14/13/12 (1170×2532) -->
+<link 
+  rel="apple-touch-startup-image" 
+  href="/splash/iphone-14.png"
+  media="(device-width: 390px) and (device-height: 844px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)"
+/>
+
+<!-- iPhone SE (750×1334) -->
+<link 
+  rel="apple-touch-startup-image" 
+  href="/splash/iphone-se.png"
+  media="(device-width: 375px) and (device-height: 667px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)"
+/>
+
+<!-- iPad Pro 12.9" (2048×2732) -->
+<link 
+  rel="apple-touch-startup-image" 
+  href="/splash/ipad-pro-12.png"
+  media="(device-width: 1024px) and (device-height: 1366px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)"
+/>
+
+<!-- iPad (1640×2360) -->
+<link 
+  rel="apple-touch-startup-image" 
+  href="/splash/ipad.png"
+  media="(device-width: 820px) and (device-height: 1180px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)"
+/>
+
+<!-- ✅ رنگ نوار وضعیت iOS -->
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+
+<!-- ✅ حالت standalone در iOS -->
+<meta name="apple-mobile-web-app-capable" content="yes" />
+```
+
+### ۳. تولید خودکار Splash Screens با Sharp
+
+```js
+// scripts/generate-splash-screens.js
+const sharp = require('sharp');
+const fs = require('fs');
+const path = require('path');
+
+// ✅ لیست دستگاه‌ها با سایز و DPR
+const devices = [
+  { name: 'iphone-14-pro-max', width: 1290, height: 2796, dpr: 3 },
+  { name: 'iphone-14-pro', width: 1179, height: 2556, dpr: 3 },
+  { name: 'iphone-14', width: 1170, height: 2532, dpr: 3 },
+  { name: 'iphone-se', width: 750, height: 1334, dpr: 2 },
+  { name: 'ipad-pro-12', width: 2048, height: 2732, dpr: 2 },
+  { name: 'ipad', width: 1640, height: 2360, dpr: 2 },
+];
+
+const BACKGROUND_COLOR = { r: 255, g: 255, b: 255, alpha: 1 };
+const LOGO_PATH = 'public/icons/logo-center.png'; // لوگوی مرکزی
+
+async function generateSplashScreens() {
+  const outputDir = 'public/splash';
+  
+  if (!fs.existsSync(outputDir)) {
+    fs.mkdirSync(outputDir, { recursive: true });
+  }
+
+  for (const device of devices) {
+    // ✅ ساخت پس‌زمینه رنگی
+    const background = await sharp({
+      create: {
+        width: device.width,
+        height: device.height,
+        channels: 4,
+        background: BACKGROUND_COLOR,
+      }
+    }).png().toBuffer();
+
+    // ✅ اندازه لوگو (۴۰٪ از عرض صفحه)
+    const logoSize = Math.round(device.width * 0.4);
+    
+    // ✅ resize لوگو
+    const logo = await sharp(LOGO_PATH)
+      .resize(logoSize, logoSize, { fit: 'contain' })
+      .toBuffer();
+
+    // ✅ ترکیب لوگو روی پس‌زمینه (در مرکز)
+    await sharp(background)
+      .composite([{
+        input: logo,
+        top: Math.round((device.height - logoSize) / 2),
+        left: Math.round((device.width - logoSize) / 2),
+      }])
+      .png()
+      .toFile(path.join(outputDir, `${device.name}.png`));
+
+    console.log(`✅ Generated: ${device.name}.png`);
+  }
+}
+
+generateSplashScreens();
+```
+
+### ۴. کامپوننت Splash Screen سفارشی در React
+
+```jsx
+// components/AppSplash.jsx
+import { useState, useEffect } from 'react';
+
+export function AppSplash({ children }) {
+  const [isReady, setIsReady] = useState(false);
+
+  useEffect(() => {
+    // ✅ صبر کردن تا همه چیز لود بشه
+    const timer = setTimeout(() => {
+      setIsReady(true);
+    }, 500); // حداقل زمان نمایش splash
+
+    return () => clearTimeout(timer);
+  }, []);
+
+  if (!isReady) {
+    return (
+      <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-white">
+        {/* ✅ لوگو با انیمیشن */}
+        <div className="animate-pulse">
+          <img 
+            src="/icons/logo-center.png" 
+            alt="لوگو"
+            className="w-32 h-32"
+          />
+        </div>
+        
+        {/* ✅ نام اپ */}
+        <h1 className="mt-6 text-2xl font-bold text-gray-900">
+          فروشگاه من
+        </h1>
+        
+        {/* ✅ لودینگ */}
+        <div className="mt-8 flex gap-1">
+          <div className="w-2 h-2 bg-blue-600 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+          <div className="w-2 h-2 bg-blue-600 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+          <div className="w-2 h-2 bg-blue-600 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+        </div>
+      </div>
+    );
+  }
+
+  return <>{children}</>;
+}
+```
+
+### ۵. پشتیبانی از Dark Mode
+
+```jsx
+// ✅ Splash Screen با پشتیبانی از تم تاریک
+function DarkModeAwareSplash() {
+  const [isDark, setIsDark] = useState(false);
+
+  useEffect(() => {
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    setIsDark(mq.matches);
+    
+    const handler = (e) => setIsDark(e.matches);
+    mq.addEventListener('change', handler);
+    return () => mq.removeEventListener('change', handler);
+  }, []);
+
+  return (
+    <div className={`fixed inset-0 z-50 flex items-center justify-center transition-colors ${
+      isDark ? 'bg-gray-900' : 'bg-white'
+    }`}>
+      <img 
+        src={isDark ? '/icons/logo-dark.png' : '/icons/logo-light.png'}
+        alt="لوگو"
+        className="w-32 h-32"
+      />
+    </div>
+  );
+}
+```
+
+```html
+<!-- ✅ در HTML: دو نسخه از splash برای iOS -->
+<!-- Light mode -->
+<link 
+  rel="apple-touch-startup-image" 
+  href="/splash/iphone-14-light.png"
+  media="(prefers-color-scheme: light) and (device-width: 390px) and (device-height: 844px)"
+/>
+<!-- Dark mode -->
+<link 
+  rel="apple-touch-startup-image" 
+  href="/splash/iphone-14-dark.png"
+  media="(prefers-color-scheme: dark) and (device-width: 390px) and (device-height: 844px)"
+/>
+```
+
+### ۶. استفاده از pwabuilder برای تولید خودکار
+
+```bash
+# ✅ نصب PWA Builder
+npm install -g pwabuilder
+
+# ✅ تولید همه‌ی splash screens
+pwabuilder pwa-manifest --manifestUrl https://yoursite.com/manifest.json
+
+# ✅ یا استفاده از وب‌سایت
+# https://www.pwabuilder.com/imageGenerator
+```
+
+**🔗 ابزار تست و ساخت**
+
+- **[maskable.app](https://maskable.app)**: برای تست آیکون maskable.
+- **[PWABuilder Image Generator](https://www.pwabuilder.com/imageGenerator)**: تولید خودکار همه‌ی سایزها.
+- **[progressier.com/pwa-icons-generator](https://progressier.com/pwa-icons-generator)**: ابزار آنلاین تولید splash.
+- **Chrome DevTools** → Application → Manifest → پیش‌نمایش splash.
+- **iOS Simulator**: تست splash screen در دستگاه‌های مختلف.
+- **Real Device Test**: روی iPhone و Android واقعی نصب کن و باز کن!
+
+**⚠️ چک‌لیست نهایی**
+
+- [ ] `background_color` در manifest تعریف شده؟
+- [ ] `theme_color` در manifest و meta tag ست شده؟
+- [ ] آیکون ۵۱۲×۵۱۲ با `purpose: "any"` داری؟
+- [ ] `apple-touch-startup-image` برای iOS اضافه شده؟
+- [ ] سایزهای مختلف برای iPhone و iPad تولید شدن؟
+- [ ] لوگو در مرکز و با اندازه مناسب قرار داره؟
+- [ ] Dark Mode پشتیبانی میشه؟
+- [ ] در iOS Safari واقعی تست شده؟
+- [ ] در Android Chrome واقعی تست شده؟
+- [ ] `apple-mobile-web-app-capable` اضافه شده؟
+- [ ] `apple-mobile-web-app-status-bar-style` ست شده؟
+
+> **قانون ۳ ثانیه‌ای:** PWA رو روی iPhone از هوم اسکرین باز کن. آیا splash screen با لوگو و رنگ برند شما ظاهر میشه؟ بعد همون کار رو روی Android Chrome انجام بده. اگه در یکی از این دو تا splash زشت یا سفید/سیاه بود، یعنی تنظیمات درست نیست! بعد DevTools → Application → Manifest رو چک کن؛ آیا `background_color` و `theme_color` درست ست شدن؟
