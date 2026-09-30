@@ -1,0 +1,565 @@
+---
+title: "PWA: Idle Detection API - تشخیص بیکار بودن کاربر"
+date: '2026-09-30'
+playlist: 'PWA - برنامه وب پیشرونده'
+tags: ['PWA', 'Idle-Detection-API', 'User-Activity', 'Device-API', 'React', 'UX', 'Video-Call']
+description: "چطور با Idle Detection API تشخیص بدیم کاربر بیکار شده، وضعیت آنلاین/آفلاین رو مدیریت کنیم و تجربه‌ی اپ‌مانند بسازیم."
+enableComment: true
+---
+
+# 🕐 PWA: Idle Detection API - تشخیص بیکار بودن کاربر
+
+**💡 مفهوم کلیدی**  
+Idle Detection API به PWA اجازه میده **تشخیص بده کاربر چقدر وقته با دستگاه تعامل نداشته**. این برای اپ‌های تماس تصویری (مثل Zoom)، چت (مثل WhatsApp)، بازی‌ها، و اپ‌های امنیتی حیاتیه. می‌تونی وضعیت کاربر رو به "away" تغییر بدی، تماس رو mute کنی، یا صفحه رو قفل کنی.
+
+**⚠️ دام رایج**  
+- فراموش کردن `navigator.idle.request()` نیاز به **permission** و **user activation** داره.
+- عدم مدیریت `change` event (وقتی وضعیت تغییر می‌کنه).
+- فراموش کردن `release()` بعد از اتمام کار.
+- نادیده گرفتن fallback برای مرورگرهای بدون پشتیبانی.
+- استفاده از threshold خیلی کم (کاربر مدام "idle" میشه!).
+- عدم ترکیب با `visibilitychange` (وقتی تب مخفی میشه).
+- نادیده گرفتن `prefers-reduced-motion` برای کاربران حساس.
+- عدم ارائه‌ی راه غیرفعال‌سازی به کاربر.
+
+**📏 وضعیت پشتیبانی مرورگرها**
+
+| مرورگر       | پشتیبانی | محدودیت                                  |
+|--------------|-----------|-------------------------------------------|
+| Chrome       | ✅        | نسخه 90+ + فقط HTTPS + permission        |
+| Edge         | ✅        | نسخه 90+                                 |
+| Opera        | ✅        | نسخه 76+                                 |
+| Safari       | ❌        | **پشتیبانی نمیشه**                        |
+| iOS Safari   | ❌        | پشتیبانی نمیشه                            |
+| Firefox      | ❌        | **پشتیبانی نمیشه**                        |
+
+> ⚠️ **نکته حیاتی**: این API فقط در مرورگرهای **Chromium-based** کار می‌کنه. همیشه fallback بذار!
+
+**🎯 کاربردهای واقعی**
+
+```
+✅ Video conferencing (تغییر وضعیت به "away")
+✅ Chat apps (نمایش آنلاین/آفلاین)
+✅ Games (pause وقتی کاربر نیست)
+✅ Security (lock screen بعد از idle)
+✅ Analytics (track engagement)
+✅ Music/Video players (pause بعد از idle)
+✅ Presentations (dim screen بعد از idle)
+```
+
+**🛠️ راه‌حل سریع در کد**
+
+### ۱. هوک React برای Idle Detection
+
+```jsx
+// hooks/useIdleDetection.js
+import { useState, useCallback, useEffect, useRef } from 'react';
+
+export function useIdleDetection(threshold = 60) {
+  const [isSupported, setIsSupported] = useState(false);
+  const [isIdle, setIsIdle] = useState(false);
+  const [permission, setPermission] = useState('prompt'); // prompt | granted | denied
+  const [error, setError] = useState(null);
+  const idleDetectorRef = useRef(null);
+
+  useEffect(() => {
+    setIsSupported('IdleDetector' in window);
+  }, []);
+
+  // ✅ درخواست permission
+  const requestPermission = useCallback(async () => {
+    if (!isSupported) {
+      setError('Idle Detection API پشتیبانی نمیشه');
+      return false;
+    }
+
+    try {
+      setError(null);
+      const perm = await IdleDetector.requestPermission();
+      setPermission(perm);
+      return perm === 'granted';
+    } catch (err) {
+      setError(err.message);
+      return false;
+    }
+  }, [isSupported]);
+
+  // ✅ شروع تشخیص idle
+  const startDetection = useCallback(async () => {
+    if (!isSupported || permission !== 'granted') {
+      setError('Permission granted نشده');
+      return false;
+    }
+
+    try {
+      setError(null);
+
+      // ✅ ساخت IdleDetector
+      const detector = new IdleDetector({ threshold: threshold * 1000 });
+      idleDetectorRef.current = detector;
+
+      // ✅ شروع تشخیص
+      await detector.start();
+
+      // ✅ گوش دادن به تغییرات
+      detector.addEventListener('change', () => {
+        const idle = detector.state === 'idle';
+        setIsIdle(idle);
+        console.log(`🕐 User is now ${idle ? 'idle' : 'active'}`);
+      });
+
+      // ✅ وضعیت اولیه
+      setIsIdle(detector.state === 'idle');
+
+      console.log(`✅ Idle detection started (threshold: ${threshold}s)`);
+      return true;
+    } catch (err) {
+      setError(err.message);
+      console.error('Idle detection error:', err);
+      return false;
+    }
+  }, [isSupported, permission, threshold]);
+
+  // ✅ توقف تشخیص
+  const stopDetection = useCallback(() => {
+    if (idleDetectorRef.current) {
+      idleDetectorRef.current.abort();
+      idleDetectorRef.current = null;
+      setIsIdle(false);
+      console.log('✅ Idle detection stopped');
+    }
+  }, []);
+
+  // ✅ cleanup
+  useEffect(() => {
+    return () => {
+      if (idleDetectorRef.current) {
+        idleDetectorRef.current.abort();
+      }
+    };
+  }, []);
+
+  return {
+    isSupported,
+    isIdle,
+    permission,
+    error,
+    requestPermission,
+    startDetection,
+    stopDetection,
+  };
+}
+```
+
+### ۲. هوک پیشرفته با auto-start
+
+```jsx
+// hooks/useIdleDetectionAdvanced.js
+import { useState, useCallback, useEffect, useRef } from 'react';
+
+export function useIdleDetectionAdvanced(threshold = 60, autoStart = true) {
+  const [isSupported, setIsSupported] = useState(false);
+  const [isIdle, setIsIdle] = useState(false);
+  const [permission, setPermission] = useState('prompt');
+  const [error, setError] = useState(null);
+  const detectorRef = useRef(null);
+
+  useEffect(() => {
+    setIsSupported('IdleDetector' in window);
+  }, []);
+
+  // ✅ درخواست permission و شروع خودکار
+  useEffect(() => {
+    if (!isSupported || !autoStart) return;
+
+    const init = async () => {
+      const perm = await IdleDetector.requestPermission();
+      setPermission(perm);
+
+      if (perm === 'granted') {
+        try {
+          const detector = new IdleDetector({ threshold: threshold * 1000 });
+          detectorRef.current = detector;
+
+          await detector.start();
+
+          detector.addEventListener('change', () => {
+            setIsIdle(detector.state === 'idle');
+          });
+
+          setIsIdle(detector.state === 'idle');
+        } catch (err) {
+          setError(err.message);
+        }
+      }
+    };
+
+    init();
+
+    return () => {
+      if (detectorRef.current) {
+        detectorRef.current.abort();
+      }
+    };
+  }, [isSupported, autoStart, threshold]);
+
+  return {
+    isSupported,
+    isIdle,
+    permission,
+    error,
+  };
+}
+```
+
+### ۳. کامپوننت Video Call با Idle Detection
+
+```jsx
+// components/VideoCallWithIdle.jsx
+import { useEffect } from 'react';
+import { useIdleDetectionAdvanced } from '@/hooks/useIdleDetectionAdvanced';
+
+export function VideoCallWithIdle() {
+  const { isSupported, isIdle, permission } = useIdleDetectionAdvanced(30, true);
+  const [isMuted, setIsMuted] = useState(false);
+  const [isVideoOff, setIsVideoOff] = useState(false);
+
+  // ✅ وقتی کاربر idle شد، mute کن
+  useEffect(() => {
+    if (isIdle) {
+      setIsMuted(true);
+      console.log('🔇 Auto-muted due to inactivity');
+    }
+  }, [isIdle]);
+
+  if (!isSupported) {
+    return <div>Idle Detection پشتیبانی نمیشه</div>;
+  }
+
+  return (
+    <div className="max-w-2xl mx-auto p-6 bg-white rounded-xl shadow-lg space-y-4">
+      <div className="flex items-center justify-between">
+        <h2 className="text-2xl font-bold">📹 تماس تصویری</h2>
+        
+        {/* ✅ وضعیت idle */}
+        {isIdle && (
+          <div className="px-3 py-1 bg-orange-100 text-orange-800 rounded-full text-sm">
+            🕐 Away
+          </div>
+        )}
+      </div>
+
+      {/* ✅ ویدیو placeholder */}
+      <div className="aspect-video bg-gray-900 rounded-lg flex items-center justify-center">
+        {isVideoOff ? (
+          <div className="text-center text-white">
+            <div className="w-20 h-20 bg-gray-700 rounded-full mx-auto mb-2 flex items-center justify-center">
+              <span className="text-3xl">👤</span>
+            </div>
+            <p>دوربین خاموش</p>
+          </div>
+        ) : (
+          <p className="text-white">ویدیوی شما</p>
+        )}
+      </div>
+
+      {/* ✅ کنترل‌ها */}
+      <div className="flex justify-center gap-4">
+        <button
+          onClick={() => setIsMuted(!isMuted)}
+          className={`px-6 py-3 rounded-full font-medium ${
+            isMuted ? 'bg-red-600 text-white' : 'bg-gray-200 text-gray-800'
+          }`}
+        >
+          {isMuted ? '🔇 Mute' : '🎤 Unmute'}
+        </button>
+
+        <button
+          onClick={() => setIsVideoOff(!isVideoOff)}
+          className={`px-6 py-3 rounded-full font-medium ${
+            isVideoOff ? 'bg-red-600 text-white' : 'bg-gray-200 text-gray-800'
+          }`}
+        >
+          {isVideoOff ? '📷 Camera Off' : '📹 Camera On'}
+        </button>
+
+        <button className="px-6 py-3 bg-red-600 text-white rounded-full font-medium">
+          📴 End Call
+        </button>
+      </div>
+
+      {/* ✅ پیام idle */}
+      {isIdle && (
+        <div className="p-4 bg-orange-50 border border-orange-200 rounded-lg">
+          <p className="text-sm text-orange-800">
+            🕐 شما بیکار تشخیص داده شدید. میکروفون به صورت خودکار mute شد.
+          </p>
+          <p className="text-xs text-orange-700 mt-1">
+            برای فعال‌سازی مجدد، با صفحه تعامل کنید.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+### ۴. کامپوننت Chat با وضعیت آنلاین
+
+```jsx
+// components/ChatWithPresence.jsx
+import { useIdleDetectionAdvanced } from '@/hooks/useIdleDetectionAdvanced';
+
+export function ChatWithPresence() {
+  const { isSupported, isIdle } = useIdleDetectionAdvanced(60, true);
+
+  const getStatus = () => {
+    if (!isSupported) return { text: 'آنلاین', color: 'green' };
+    if (isIdle) return { text: 'دور', color: 'orange' };
+    return { text: 'آنلاین', color: 'green' };
+  };
+
+  const status = getStatus();
+
+  return (
+    <div className="max-w-md mx-auto p-6 bg-white rounded-xl shadow-lg space-y-4">
+      {/* ✅ هدر با وضعیت */}
+      <div className="flex items-center justify-between">
+        <h2 className="text-xl font-bold">💬 چت</h2>
+        <div className="flex items-center gap-2">
+          <div className={`w-3 h-3 rounded-full bg-${status.color}-500`} />
+          <span className="text-sm">{status.text}</span>
+        </div>
+      </div>
+
+      {/* ✅ پیام‌ها */}
+      <div className="space-y-3 h-64 overflow-y-auto bg-gray-50 p-4 rounded-lg">
+        <div className="flex gap-2">
+          <div className="w-8 h-8 bg-blue-500 rounded-full" />
+          <div className="bg-white p-3 rounded-lg">
+            <p className="text-sm">سلام! خوبی؟</p>
+          </div>
+        </div>
+        <div className="flex gap-2 justify-end">
+          <div className="bg-blue-600 text-white p-3 rounded-lg">
+            <p className="text-sm">سلام! مرسی، تو چطوری؟</p>
+          </div>
+          <div className="w-8 h-8 bg-green-500 rounded-full" />
+        </div>
+      </div>
+
+      {/* ✅ ورودی پیام */}
+      <div className="flex gap-2">
+        <input
+          type="text"
+          placeholder="پیام خود را بنویسید..."
+          className="flex-1 p-3 border border-gray-300 rounded-lg"
+        />
+        <button className="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700">
+          ارسال
+        </button>
+      </div>
+
+      {/* ✅ پیام idle */}
+      {isIdle && (
+        <div className="p-3 bg-orange-50 border border-orange-200 rounded-lg text-center">
+          <p className="text-sm text-orange-800">
+            🕐 وضعیت شما به "دور" تغییر کرد
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+### ۵. کامپوننت Security Lock
+
+```jsx
+// components/SecurityLock.jsx
+import { useState, useEffect } from 'react';
+import { useIdleDetectionAdvanced } from '@/hooks/useIdleDetectionAdvanced';
+
+export function SecurityLock() {
+  const { isIdle } = useIdleDetectionAdvanced(120, true); // ۲ دقیقه
+  const [isLocked, setIsLocked] = useState(false);
+  const [countdown, setCountdown] = useState(5);
+
+  // ✅ وقتی کاربر idle شد، قفل کن
+  useEffect(() => {
+    if (isIdle && !isLocked) {
+      // ✅ شمارش معکوس قبل از قفل
+      const timer = setInterval(() => {
+        setCountdown((prev) => {
+          if (prev <= 1) {
+            setIsLocked(true);
+            clearInterval(timer);
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+
+      return () => clearInterval(timer);
+    }
+  }, [isIdle, isLocked]);
+
+  // ✅ وقتی کاربر برمی‌گرده، countdown رو reset کن
+  useEffect(() => {
+    if (!isIdle) {
+      setCountdown(5);
+    }
+  }, [isIdle]);
+
+  if (isLocked) {
+    return (
+      <div className="fixed inset-0 bg-gray-900 flex items-center justify-center z-50">
+        <div className="text-center text-white space-y-6">
+          <div className="text-6xl">🔒</div>
+          <h2 className="text-3xl font-bold">صفحه قفل شد</h2>
+          <p className="text-gray-400">به دلیل عدم فعالیت، صفحه قفل شد</p>
+          <button
+            onClick={() => setIsLocked(false)}
+            className="bg-blue-600 text-white px-8 py-3 rounded-lg hover:bg-blue-700"
+          >
+            باز کردن قفل
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-w-md mx-auto p-6 bg-white rounded-xl shadow-lg">
+      <h2 className="text-xl font-bold mb-4">🔐 اپ امنیتی</h2>
+      
+      {isIdle && (
+        <div className="p-4 bg-red-50 border border-red-200 rounded-lg">
+          <p className="text-sm text-red-800 font-medium">
+            ⚠️ شما بیکار تشخیص داده شدید
+          </p>
+          <p className="text-xs text-red-700 mt-1">
+            صفحه در {countdown} ثانیه قفل می‌شه...
+          </p>
+        </div>
+      )}
+
+      <p className="text-gray-600 mt-4">
+        محتوای اپ شما اینجا هست. اگه ۲ دقیقه تعامل نکنید، صفحه قفل می‌شه.
+      </p>
+    </div>
+  );
+}
+```
+
+### ۶. Fallback برای مرورگرهای بدون پشتیبانی
+
+```jsx
+// hooks/useIdleDetectionWithFallback.js
+import { useState, useEffect, useRef } from 'react';
+
+export function useIdleDetectionWithFallback(threshold = 60) {
+  const [isIdle, setIsIdle] = useState(false);
+  const [isSupported, setIsSupported] = useState(false);
+  const lastActivityRef = useRef(Date.now());
+  const timerRef = useRef(null);
+
+  useEffect(() => {
+    const supported = 'IdleDetector' in window;
+    setIsSupported(supported);
+
+    if (!supported) {
+      // ✅ Fallback: manual idle detection
+      const updateActivity = () => {
+        lastActivityRef.current = Date.now();
+        setIsIdle(false);
+      };
+
+      const events = ['mousedown', 'mousemove', 'keydown', 'touchstart', 'scroll'];
+      events.forEach((event) => {
+        window.addEventListener(event, updateActivity);
+      });
+
+      // ✅ بررسی دوره‌ای
+      timerRef.current = setInterval(() => {
+        const idleTime = (Date.now() - lastActivityRef.current) / 1000;
+        setIsIdle(idleTime >= threshold);
+      }, 1000);
+
+      return () => {
+        events.forEach((event) => {
+          window.removeEventListener(event, updateActivity);
+        });
+        clearInterval(timerRef.current);
+      };
+    }
+  }, [threshold]);
+
+  return { isIdle, isSupported };
+}
+```
+
+### ۷. ترکیب با Visibility Change
+
+```jsx
+// hooks/useIdleAndVisibility.js
+import { useState, useEffect } from 'react';
+import { useIdleDetectionAdvanced } from './useIdleDetectionAdvanced';
+
+export function useIdleAndVisibility(threshold = 60) {
+  const { isIdle, isSupported } = useIdleDetectionAdvanced(threshold, true);
+  const [isHidden, setIsHidden] = useState(false);
+
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      setIsHidden(document.hidden);
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, []);
+
+  // ✅ کاربر inactive هست اگه idle باشه یا تب مخفی باشه
+  const isInactive = isIdle || isHidden;
+
+  return { isIdle, isHidden, isInactive, isSupported };
+}
+
+// ✅ استفاده:
+function VideoPlayer() {
+  const { isInactive } = useIdleAndVisibility(30);
+
+  useEffect(() => {
+    if (isInactive) {
+      console.log('⏸️ Pausing video due to inactivity');
+      // pause video
+    }
+  }, [isInactive]);
+
+  return <video src="..." controls />;
+}
+```
+
+**🔗 ابزار تست**
+
+- **Chrome DevTools** → Application → Idle Detection (مشاهده وضعیت).
+- **Console**: `IdleDetector.requestPermission().then(console.log)` برای تست permission.
+- **تست واقعی**: روی Chrome دسکتاپ تست کن. ۶۰ ثانیه با صفحه تعامل نکن و ببین idle میشه یا نه.
+- **Safari/Firefox**: تست کن که fallback درست کار می‌کنه.
+- **Permission Test**: بعد از `requestPermission()`، باید `granted` برگردونه.
+
+**⚠️ چک‌لیست نهایی**
+
+- [ ] بررسی `'IdleDetector' in window` قبل از استفاده؟
+- [ ] درخواست permission با `IdleDetector.requestPermission()`؟
+- [ ] استفاده فقط در user gesture (کلیک)؟
+- [ ] مدیریت `change` event؟
+- [ ] `abort()` در cleanup؟
+- [ ] Fallback برای مرورگرهای بدون پشتیبانی؟
+- [ ] ترکیب با `visibilitychange`؟
+- [ ] threshold مناسب (نه خیلی کم، نه خیلی زیاد)؟
+- [ ] احترام به حریم خصوصی (توضیح به کاربر)؟
+- [ ] تست در Chrome واقعی؟
+- [ ] تست در Safari/Firefox (fallback)؟
+
+> **قانون ۳ ثانیه‌ای:** Console رو باز کن و بنویس `await IdleDetector.requestPermission()`. اگه `granted` برگردوند، یعنی permission داری. بعد بنویس `const detector = new IdleDetector({ threshold: 5000 }); await detector.start(); detector.addEventListener('change', () => console.log(detector.state))`. ۵ ثانیه با صفحه تعامل نکن؛ باید `idle` چاپ بشه. اگه نه، یعنی API درست کار نمی‌کنه!
