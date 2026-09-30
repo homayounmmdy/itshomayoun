@@ -1,0 +1,565 @@
+---
+title: "PWA: StorageManager API - مدیریت quota و persistence"
+date: '2026-09-30'
+playlist: 'PWA - برنامه وب پیشرونده'
+tags: ['PWA', 'StorageManager-API', 'Quota', 'Persistence', 'Storage', 'OPFS', 'IndexedDB', 'React']
+description: "چطور با StorageManager API فضای ذخیره‌سازی رو مدیریت کنیم، quota رو بررسی کنیم و با persist() از پاک شدن داده‌ها توسط مرورگر جلوگیری کنیم."
+enableComment: true
+---
+
+# 💾 PWA: StorageManager API - مدیریت quota و persistence
+
+**💡 مفهوم کلیدی**  
+StorageManager API به PWA اجازه میده **فضای ذخیره‌سازی** رو مدیریت کنه و از مرورگر درخواست کنه که داده‌ها رو **پاک نکنه** (persistent storage). این API برای اپ‌هایی که داده‌های مهم ذخیره می‌کنن (مثل اپ‌های آفلاین، SQLite در OPFS، یا cache بزرگ) حیاتیه. بدون persistence، مرورگر ممکنه وقتی فضا کم میاد، داده‌های شما رو پاک کنه!
+
+**سه قابلیت اصلی:**
+- **`estimate()`**: بررسی فضای استفاده‌شده و quota
+- **`persist()`**: درخواست persistent storage (مرورگر داده‌ها رو پاک نمی‌کنه)
+- **`persisted()`**: بررسی اینکه آیا الان persistent هست یا نه
+- **`getDirectory()`**: دسترسی به OPFS (که قبلاً پوشش دادیم)
+
+**⚠️ دام رایج**  
+- فراموش کردن `persist()` → مرورگر ممکنه داده‌های مهم رو پاک کنه!
+- عدم بررسی quota قبل از ذخیره‌ی داده‌ی بزرگ → `QuotaExceededError`.
+- نادیده گرفتن اینکه `persist()` نیاز به user activation داره.
+- عدم پاک‌سازی خودکار وقتی فضا رو به اتمامه.
+- فراموش کردن که `persist()` فقط یه **درخواست** هست (مرورگر ممکنه رد کنه).
+- عدم ترکیب با `Storage Quota API` برای مدیریت بهتر.
+- نادیده گرفتن اینکه بعضی مرورگرها (مثل Safari) persistence رو به شکل متفاوتی مدیریت می‌کنن.
+
+**📏 وضعیت پشتیبانی مرورگرها**
+
+| قابلیت              | Chrome | Edge | Firefox | Safari | iOS Safari |
+|---------------------|--------|------|---------|--------|------------|
+| `estimate()`        | ✅     | ✅   | ✅      | ✅     | ✅         |
+| `persist()`         | ✅     | ✅   | ✅      | ❌     | ❌         |
+| `persisted()`       | ✅     | ✅   | ✅      | ❌     | ❌         |
+| `getDirectory()`    | ✅ 102+| ✅   | ✅ 111+ | ✅ 15.2+| ✅ 15.2+  |
+
+> ⚠️ **نکته حیاتی**: `persist()` در Safari پشتیبانی نمیشه، ولی Safari خودش یه سیستم مدیریت storage داره که داده‌های مهم رو پاک نمی‌کنه (اگه کاربر تعامل داشته باشه).
+
+**🎯 چرا persistence مهمه؟**
+
+```
+بدون persistence:
+- مرورگر ممکنه وقتی فضا کم میاد، IndexedDB/OPFS شما رو پاک کنه
+- کاربر بعد از چند روز، داده‌هاش رو از دست میده
+- تجربه‌ی کاربری افتضاح!
+
+با persistence:
+- مرورگر قول میده داده‌ها رو پاک نکنه (مگر اینکه کاربر خودش پاک کنه)
+- مناسب برای اپ‌های آفلاین، دیتابیس، فایل‌های مهم
+- تجربه‌ی اپ‌مانند
+```
+
+**🛠️ راه‌حل سریع در کد**
+
+### ۱. هوک React برای StorageManager
+
+```jsx
+// hooks/useStorageManager.js
+import { useState, useCallback, useEffect } from 'react';
+
+export function useStorageManager() {
+  const [isSupported, setIsSupported] = useState(false);
+  const [quota, setQuota] = useState(null);
+  const [isPersistent, setIsPersistent] = useState(false);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    setIsSupported('storage' in navigator);
+  }, []);
+
+  // ✅ بررسی quota
+  const checkQuota = useCallback(async () => {
+    if (!isSupported || !navigator.storage?.estimate) {
+      return null;
+    }
+
+    try {
+      setError(null);
+      const estimate = await navigator.storage.estimate();
+      
+      const quotaInfo = {
+        usage: estimate.usage,
+        quota: estimate.quota,
+        usageMB: (estimate.usage / 1024 / 1024).toFixed(2),
+        quotaMB: (estimate.quota / 1024 / 1024).toFixed(2),
+        usageGB: (estimate.usage / 1024 / 1024 / 1024).toFixed(2),
+        quotaGB: (estimate.quota / 1024 / 1024 / 1024).toFixed(2),
+        percent: ((estimate.usage / estimate.quota) * 100).toFixed(1),
+        remainingMB: ((estimate.quota - estimate.usage) / 1024 / 1024).toFixed(2),
+      };
+
+      setQuota(quotaInfo);
+      return quotaInfo;
+    } catch (err) {
+      setError(err.message);
+      return null;
+    }
+  }, [isSupported]);
+
+  // ✅ درخواست persistence
+  const requestPersistence = useCallback(async () => {
+    if (!isSupported || !navigator.storage?.persist) {
+      setError('StorageManager API پشتیبانی نمیشه');
+      return false;
+    }
+
+    try {
+      setError(null);
+      
+      // ✅ درخواست persistent storage (نیاز به user activation)
+      const persisted = await navigator.storage.persist();
+      setIsPersistent(persisted);
+      
+      console.log(`✅ Persistence: ${persisted ? 'granted' : 'denied'}`);
+      return persisted;
+    } catch (err) {
+      setError(err.message);
+      return false;
+    }
+  }, [isSupported]);
+
+  // ✅ بررسی وضعیت persistence
+  const checkPersistence = useCallback(async () => {
+    if (!isSupported || !navigator.storage?.persisted) {
+      return false;
+    }
+
+    try {
+      const persisted = await navigator.storage.persisted();
+      setIsPersistent(persisted);
+      return persisted;
+    } catch (err) {
+      setError(err.message);
+      return false;
+    }
+  }, [isSupported]);
+
+  // ✅ بررسی اولیه هنگام لود
+  useEffect(() => {
+    if (isSupported) {
+      checkQuota();
+      checkPersistence();
+    }
+  }, [isSupported, checkQuota, checkPersistence]);
+
+  return {
+    isSupported,
+    quota,
+    isPersistent,
+    error,
+    checkQuota,
+    requestPersistence,
+    checkPersistence,
+  };
+}
+```
+
+### ۲. کامپوننت نمایش وضعیت Storage
+
+```jsx
+// components/StorageStatus.jsx
+import { useStorageManager } from '@/hooks/useStorageManager';
+
+export function StorageStatus() {
+  const { isSupported, quota, isPersistent, checkQuota, requestPersistence } = 
+    useStorageManager();
+
+  if (!isSupported) {
+    return (
+      <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+        <p className="text-sm text-yellow-800">
+          ⚠️ StorageManager API در این مرورگر پشتیبانی نمیشه.
+        </p>
+      </div>
+    );
+  }
+
+  if (!quota) {
+    return <p>در حال بارگذاری...</p>;
+  }
+
+  return (
+    <div className="max-w-md mx-auto p-6 bg-white rounded-xl shadow-lg space-y-4">
+      <h3 className="font-bold text-lg">💾 وضعیت ذخیره‌سازی</h3>
+
+      {/* ✅ وضعیت Persistence */}
+      <div className={`p-4 rounded-lg border ${
+        isPersistent 
+          ? 'bg-green-50 border-green-200' 
+          : 'bg-orange-50 border-orange-200'
+      }`}>
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="font-medium text-sm">
+              {isPersistent ? '✅ Persistent Storage' : '⚠️ Non-Persistent'}
+            </p>
+            <p className="text-xs text-gray-600 mt-1">
+              {isPersistent 
+                ? 'مرورگر داده‌های شما رو پاک نمی‌کنه' 
+                : 'مرورگر ممکنه داده‌ها رو پاک کنه'}
+            </p>
+          </div>
+          {!isPersistent && (
+            <button
+              onClick={requestPersistence}
+              className="bg-orange-600 text-white px-3 py-1 rounded text-sm hover:bg-orange-700"
+            >
+              فعال‌سازی
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* ✅ Quota Info */}
+      <div className="space-y-2">
+        <div className="flex justify-between text-sm">
+          <span>فضای استفاده‌شده:</span>
+          <span className="font-medium">{quota.usageMB} MB</span>
+        </div>
+        <div className="flex justify-between text-sm">
+          <span>کل فضای موجود:</span>
+          <span className="font-medium">{quota.quotaMB} MB</span>
+        </div>
+        <div className="flex justify-between text-sm">
+          <span>فضای باقی‌مانده:</span>
+          <span className="font-medium text-green-600">{quota.remainingMB} MB</span>
+        </div>
+
+        {/* ✅ Progress Bar */}
+        <div className="w-full bg-gray-200 rounded-full h-3 mt-2">
+          <div
+            className={`h-3 rounded-full transition-all ${
+              parseFloat(quota.percent) > 80 
+                ? 'bg-red-500' 
+                : parseFloat(quota.percent) > 50 
+                ? 'bg-yellow-500' 
+                : 'bg-green-500'
+            }`}
+            style={{ width: `${quota.percent}%` }}
+          />
+        </div>
+        <p className="text-xs text-gray-500 text-center">
+          {quota.percent}% استفاده شده
+        </p>
+      </div>
+
+      {/* ✅ دکمه بروزرسانی */}
+      <button
+        onClick={checkQuota}
+        className="w-full bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
+      >
+        🔄 بروزرسانی
+      </button>
+    </div>
+  );
+}
+```
+
+### ۳. هوک مدیریت خودکار Quota
+
+```jsx
+// hooks/useQuotaManager.js
+import { useEffect } from 'react';
+import { useStorageManager } from './useStorageManager';
+
+export function useQuotaManager(onQuotaExceeded) {
+  const { quota, checkQuota, requestPersistence } = useStorageManager();
+
+  // ✅ درخواست persistence هنگام لود
+  useEffect(() => {
+    requestPersistence();
+  }, [requestPersistence]);
+
+  // ✅ بررسی دوره‌ای quota
+  useEffect(() => {
+    const interval = setInterval(() => {
+      checkQuota();
+    }, 60000); // هر ۱ دقیقه
+
+    return () => clearInterval(interval);
+  }, [checkQuota]);
+
+  // ✅ هشدار وقتی quota رو به اتمامه
+  useEffect(() => {
+    if (quota && parseFloat(quota.percent) > 80) {
+      console.warn('⚠️ Storage quota is running low!');
+      onQuotaExceeded?.(quota);
+    }
+  }, [quota, onQuotaExceeded]);
+
+  return { quota };
+}
+
+// ✅ استفاده:
+function App() {
+  useQuotaManager((quota) => {
+    alert(`⚠️ فضای ذخیره‌سازی رو به اتمامه!\n${quota.percent}% استفاده شده`);
+  });
+
+  return <div>...</div>;
+}
+```
+
+### ۴. پاک‌سازی خودکار وقتی فضا کمه
+
+```jsx
+// lib/storage-cleanup.js
+
+export async function cleanupStorageIfNeeded(thresholdPercent = 80) {
+  if (!navigator.storage?.estimate) return;
+
+  const estimate = await navigator.storage.estimate();
+  const percent = (estimate.usage / estimate.quota) * 100;
+
+  if (percent > thresholdPercent) {
+    console.warn(`⚠️ Storage usage is ${percent.toFixed(1)}%, cleaning up...`);
+
+    // ✅ پاک کردن cache‌های قدیمی
+    const cacheNames = await caches.keys();
+    for (const name of cacheNames) {
+      if (name.includes('old') || name.includes('temp')) {
+        await caches.delete(name);
+        console.log(`✅ Deleted cache: ${name}`);
+      }
+    }
+
+    // ✅ پاک کردن IndexedDB‌های موقت
+    const databases = await indexedDB.databases();
+    for (const db of databases) {
+      if (db.name.includes('temp') || db.name.includes('cache')) {
+        indexedDB.deleteDatabase(db.name);
+        console.log(`✅ Deleted database: ${db.name}`);
+      }
+    }
+
+    // ✅ پاک کردن OPFS‌های موقت
+    if (navigator.storage?.getDirectory) {
+      const root = await navigator.storage.getDirectory();
+      for await (const [name, handle] of root) {
+        if (name.includes('temp') || name.includes('cache')) {
+          await root.removeEntry(name, { recursive: true });
+          console.log(`✅ Deleted OPFS: ${name}`);
+        }
+      }
+    }
+
+    console.log('✅ Cleanup complete');
+    return true;
+  }
+
+  return false;
+}
+
+// ✅ استفاده هنگام لود اپ
+if (typeof window !== 'undefined') {
+  cleanupStorageIfNeeded(80);
+}
+```
+
+### ۵. بررسی قبل از ذخیره‌ی داده‌ی بزرگ
+
+```jsx
+// hooks/useSafeStorage.js
+import { useCallback } from 'react';
+import { useStorageManager } from './useStorageManager';
+
+export function useSafeStorage() {
+  const { quota, checkQuota } = useStorageManager();
+
+  // ✅ بررسی اینکه آیا فضای کافی برای ذخیره وجود داره
+  const hasEnoughSpace = useCallback(async (sizeInBytes) => {
+    const currentQuota = await checkQuota();
+    
+    if (!currentQuota) return false;
+
+    const remainingBytes = currentQuota.quota - currentQuota.usage;
+    const hasSpace = remainingBytes > sizeInBytes;
+
+    if (!hasSpace) {
+      console.warn(`⚠️ Not enough space! Need ${sizeInBytes} bytes, have ${remainingBytes} bytes`);
+    }
+
+    return hasSpace;
+  }, [checkQuota]);
+
+  // ✅ ذخیره‌ی امن با بررسی quota
+  const safeSave = useCallback(async (key, data, storageType = 'indexeddb') => {
+    const sizeInBytes = JSON.stringify(data).length * 2; // تقریبی
+    
+    if (!(await hasEnoughSpace(sizeInBytes))) {
+      // ✅ تلاش برای پاک‌سازی
+      await cleanupStorageIfNeeded(70);
+      
+      // ✅ دوباره بررسی
+      if (!(await hasEnoughSpace(sizeInBytes))) {
+        throw new Error('Not enough storage space');
+      }
+    }
+
+    // ✅ ذخیره در IndexedDB
+    if (storageType === 'indexeddb') {
+      const db = await openDB('app-data', 1);
+      await db.put('data', data, key);
+      return true;
+    }
+
+    // ✅ ذخیره در OPFS
+    if (storageType === 'opfs') {
+      const root = await navigator.storage.getDirectory();
+      const handle = await root.getFileHandle(key, { create: true });
+      const writable = await handle.createWritable();
+      await writable.write(JSON.stringify(data));
+      await writable.close();
+      return true;
+    }
+
+    return false;
+  }, [hasEnoughSpace]);
+
+  return { hasEnoughSpace, safeSave };
+}
+
+// ✅ استفاده:
+function DownloadButton({ fileUrl, filename }) {
+  const { safeSave } = useSafeStorage();
+
+  const handleDownload = async () => {
+    try {
+      const response = await fetch(fileUrl);
+      const blob = await response.blob();
+      
+      await safeSave(filename, blob, 'opfs');
+      alert('✅ فایل با موفقیت ذخیره شد');
+    } catch (error) {
+      if (error.message === 'Not enough storage space') {
+        alert('❌ فضای کافی برای ذخیره وجود نداره');
+      } else {
+        alert('❌ خطا در ذخیره فایل');
+      }
+    }
+  };
+
+  return (
+    <button onClick={handleDownload} className="bg-blue-600 text-white px-4 py-2 rounded">
+      📥 دانلود و ذخیره
+    </button>
+  );
+}
+```
+
+### ۶. کامپوننت مدیریت Storage
+
+```jsx
+// components/StorageManager.jsx
+import { useState } from 'react';
+import { useStorageManager } from '@/hooks/useStorageManager';
+import { cleanupStorageIfNeeded } from '@/lib/storage-cleanup';
+
+export function StorageManager() {
+  const { isSupported, quota, isPersistent, checkQuota, requestPersistence } = 
+    useStorageManager();
+  const [cleaning, setCleaning] = useState(false);
+
+  const handleCleanup = async () => {
+    setCleaning(true);
+    await cleanupStorageIfNeeded(0); // پاک‌سازی همه‌ی فایل‌های موقت
+    await checkQuota();
+    setCleaning(false);
+    alert('✅ پاک‌سازی انجام شد');
+  };
+
+  if (!isSupported) {
+    return (
+      <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+        <p className="text-sm text-yellow-800">
+          ⚠️ StorageManager API پشتیبانی نمیشه.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-w-md mx-auto p-6 bg-white rounded-xl shadow-lg space-y-4">
+      <h3 className="font-bold text-lg">💾 مدیریت ذخیره‌سازی</h3>
+
+      {/* ✅ وضعیت Persistence */}
+      <div className={`p-4 rounded-lg border ${
+        isPersistent ? 'bg-green-50 border-green-200' : 'bg-orange-50 border-orange-200'
+      }`}>
+        <p className="font-medium text-sm">
+          {isPersistent ? '✅ Persistent' : '⚠️ Non-Persistent'}
+        </p>
+        {!isPersistent && (
+          <button
+            onClick={requestPersistence}
+            className="mt-2 bg-orange-600 text-white px-3 py-1 rounded text-sm"
+          >
+            فعال‌سازی Persistence
+          </button>
+        )}
+      </div>
+
+      {/* ✅ Quota Info */}
+      {quota && (
+        <div className="space-y-2">
+          <div className="flex justify-between text-sm">
+            <span>استفاده‌شده:</span>
+            <span>{quota.usageMB} MB / {quota.quotaMB} MB</span>
+          </div>
+          <div className="w-full bg-gray-200 rounded-full h-3">
+            <div
+              className={`h-3 rounded-full ${
+                parseFloat(quota.percent) > 80 ? 'bg-red-500' : 'bg-blue-500'
+              }`}
+              style={{ width: `${quota.percent}%` }}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* ✅ دکمه‌ها */}
+      <div className="flex gap-2">
+        <button
+          onClick={checkQuota}
+          className="flex-1 bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
+        >
+          🔄 بروزرسانی
+        </button>
+        <button
+          onClick={handleCleanup}
+          disabled={cleaning}
+          className="flex-1 bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700 disabled:opacity-50"
+        >
+          {cleaning ? 'در حال پاک‌سازی...' : '🗑️ پاک‌سازی'}
+        </button>
+      </div>
+    </div>
+  );
+}
+```
+
+**🔗 ابزار تست**
+
+- **Chrome DevTools** → Application → Storage (مشاهده quota و persistence).
+- **Console**: `navigator.storage.estimate().then(console.log)` برای بررسی quota.
+- **Console**: `navigator.storage.persisted().then(console.log)` برای بررسی persistence.
+- **DevTools** → Application → Clear storage (پاک کردن همه).
+- **Quota Test**: داده‌ی بزرگ ذخیره کن تا QuotaExceededError بگیری.
+- **Persistence Test**: بعد از `persist()`، مرورگر رو ببند و باز کن؛ داده‌ها باید باقی بمونن.
+
+**⚠️ چک‌لیست نهایی**
+
+- [ ] بررسی `navigator.storage` قبل از استفاده؟
+- [ ] `persist()` هنگام لود اپ صدا زده شده؟
+- [ ] `estimate()` برای بررسی quota استفاده شده؟
+- [ ] پاک‌سازی خودکار وقتی quota رو به اتمامه؟
+- [ ] بررسی فضای کافی قبل از ذخیره‌ی داده‌ی بزرگ؟
+- [ ] مدیریت `QuotaExceededError`؟
+- [ ] تست در Chrome، Firefox و Safari؟
+- [ ] تست persistence (بستن و باز کردن مرورگر)؟
+- [ ] احترام به حریم خصوصی (توضیح به کاربر چرا persistence می‌خوای)؟
+
+> **قانون ۳ ثانیه‌ای:** Console رو باز کن و بنویس `await navigator.storage.persisted()`. اگه `true` بود، یعنی persistent هستی. اگه `false` بود، بنویس `await navigator.storage.persist()`؛ باید `true` برگردونه. بعد `await navigator.storage.estimate()` رو اجرا کن؛ باید quota و usage رو نشون بده. اگه خطا داد، یعنی StorageManager API کار نمی‌کنه!
