@@ -1,0 +1,667 @@
+---
+title: "PWA: Shape Detection API - تشخیص چهره، بارکد و متن"
+date: '2026-09-29'
+playlist: 'PWA - برنامه وب پیشرونده'
+tags: ['PWA', 'Shape-Detection-API', 'Face-Detector', 'Barcode-Detector', 'Text-Detector', 'OCR', 'QR-Code', 'React', 'Camera']
+description: "چطور با Shape Detection API چهره، بارکد و متن رو در تصاویر تشخیص بدیم، QR code اسکن کنیم و OCR تحت وب بسازیم."
+enableComment: true
+---
+
+# 🔍 PWA: Shape Detection API - تشخیص چهره، بارکد و متن
+
+**💡 مفهوم کلیدی**  
+Shape Detection API یه مجموعه از APIها برای **تشخیص الگوها در تصاویر** هست:
+- **FaceDetector**: تشخیص چهره‌ها در تصویر
+- **BarcodeDetector**: تشخیص بارکد و QR Code
+- **TextDetector**: تشخیص متن (OCR)
+
+این APIها از **سخت‌افزار دستگاه** (GPU/NPU) استفاده می‌کنن و خیلی سریع‌تر از کتابخانه‌های JavaScript هستن. برای اسکنر QR، اپ‌های احراز هویت چهره، و OCR تحت وب فوق‌العاده‌ان.
+
+**⚠️ دام رایج**  
+- فراموش کردن بررسی پشتیبانی (این API هنوز experimental هست!).
+- عدم استفاده از `detect()` که Promise برمی‌گردونه.
+- نادیده گرفتن اینکه `TextDetector` فقط در بعضی مرورگرها کار می‌کنه.
+- عدم ارائه‌ی fallback برای مرورگرهای بدون پشتیبانی.
+- فراموش کردن `getImageData()` از canvas قبل از تشخیص.
+- عدم مدیریت خطای `NotSupportedError`.
+- نادیده گرفتن `format` در BarcodeDetector (برای محدود کردن نوع بارکد).
+- عدم ترکیب با MediaDevices API برای اسکن زنده.
+
+**📏 وضعیت پشتیبانی مرورگرها (خیلی محدود!)**
+
+| API                  | Chrome | Edge | Firefox | Safari | iOS Safari |
+|----------------------|--------|------|---------|--------|------------|
+| FaceDetector         | ✅ 75+ | ✅   | ❌      | ❌     | ❌         |
+| BarcodeDetector      | ✅ 83+ | ✅   | ❌      | ❌     | ❌         |
+| TextDetector         | ⚠️     | ⚠️   | ❌      | ❌     | ❌         |
+
+> ⚠️ **نکته حیاتی**: این APIها فقط در مرورگرهای **Chromium-based** کار می‌کنن. TextDetector هنوز experimental هست. همیشه fallback بذار!
+
+**🎯 کاربردهای واقعی**
+
+```
+✅ اسکنر QR Code / بارکد
+✅ احراز هویت چهره
+✅ OCR (تبدیل تصویر به متن)
+✅ اسکن کارت ویزیت
+✅ اسکن سند و رسید
+✅ اپ‌های بانکی (اسکن چک)
+✅ اپ‌های آموزشی (اسکن کتاب)
+✅ فیلترهای چهره (مثل Instagram)
+```
+
+**🛠️ راه‌حل سریع در کد**
+
+### ۱. هوک React برای Shape Detection
+
+```jsx
+// hooks/useShapeDetection.js
+import { useState, useCallback, useEffect } from 'react';
+
+export function useShapeDetection() {
+  const [capabilities, setCapabilities] = useState({
+    face: false,
+    barcode: false,
+    text: false,
+  });
+
+  useEffect(() => {
+    setCapabilities({
+      face: 'FaceDetector' in window,
+      barcode: 'BarcodeDetector' in window,
+      text: 'TextDetector' in window,
+    });
+  }, []);
+
+  // ✅ تشخیص چهره
+  const detectFaces = useCallback(async (imageSource) => {
+    if (!capabilities.face) return [];
+
+    try {
+      const detector = new FaceDetector({
+        maxDetectedFaces: 10,
+        fastMode: true,
+      });
+      
+      const faces = await detector.detect(imageSource);
+      return faces.map((face) => ({
+        boundingBox: face.boundingBox,
+        landmarks: face.landmarks,
+      }));
+    } catch (err) {
+      console.error('Face detection error:', err);
+      return [];
+    }
+  }, [capabilities.face]);
+
+  // ✅ تشخیص بارکد
+  const detectBarcodes = useCallback(async (imageSource, formats = []) => {
+    if (!capabilities.barcode) return [];
+
+    try {
+      const options = formats.length > 0 ? { formats } : {};
+      const detector = new BarcodeDetector(options);
+      
+      const barcodes = await detector.detect(imageSource);
+      return barcodes.map((barcode) => ({
+        rawValue: barcode.rawValue,
+        format: barcode.format,
+        boundingBox: barcode.boundingBox,
+        cornerPoints: barcode.cornerPoints,
+      }));
+    } catch (err) {
+      console.error('Barcode detection error:', err);
+      return [];
+    }
+  }, [capabilities.barcode]);
+
+  // ✅ تشخیص متن (OCR)
+  const detectText = useCallback(async (imageSource) => {
+    if (!capabilities.text) return [];
+
+    try {
+      const detector = new TextDetector();
+      const texts = await detector.detect(imageSource);
+      return texts.map((text) => ({
+        text: text.boundingBox, // TextDetector فقط bounding box برمی‌گردونه!
+        boundingBox: text.boundingBox,
+      }));
+    } catch (err) {
+      console.error('Text detection error:', err);
+      return [];
+    }
+  }, [capabilities.text]);
+
+  return {
+    capabilities,
+    detectFaces,
+    detectBarcodes,
+    detectText,
+  };
+}
+```
+
+### ۲. کامپوننت اسکنر QR Code
+
+```jsx
+// components/QRScanner.jsx
+import { useState, useRef, useEffect } from 'react';
+import { useShapeDetection } from '@/hooks/useShapeDetection';
+
+export function QRScanner({ onScan }) {
+  const { capabilities, detectBarcodes } = useShapeDetection();
+  const videoRef = useRef(null);
+  const canvasRef = useRef(null);
+  const [scanning, setScanning] = useState(false);
+  const [lastResult, setLastResult] = useState(null);
+  const [error, setError] = useState(null);
+  const streamRef = useRef(null);
+  const animationRef = useRef(null);
+
+  // ✅ شروع اسکن
+  const startScanning = async () => {
+    if (!capabilities.barcode) {
+      setError('BarcodeDetector پشتیبانی نمیشه');
+      return;
+    }
+
+    try {
+      setError(null);
+      
+      // ✅ درخواست دسترسی به دوربین
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment' }, // دوربین پشت
+      });
+      
+      streamRef.current = stream;
+      videoRef.current.srcObject = stream;
+      await videoRef.current.play();
+      
+      setScanning(true);
+      scanLoop();
+    } catch (err) {
+      setError('دسترسی به دوربین رد شد');
+    }
+  };
+
+  // ✅ حلقه اسکن
+  const scanLoop = async () => {
+    if (!scanning) return;
+
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    
+    if (video && canvas) {
+      const ctx = canvas.getContext('2d');
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      ctx.drawImage(video, 0, 0);
+
+      // ✅ تشخیص بارکد
+      const barcodes = await detectBarcodes(canvas, ['qr_code']);
+      
+      if (barcodes.length > 0) {
+        const result = barcodes[0];
+        setLastResult(result);
+        onScan?.(result.rawValue);
+        
+        // ✅ لرزش موفقیت
+        if ('vibrate' in navigator) {
+          navigator.vibrate(100);
+        }
+        
+        // ✅ توقف اسکن بعد از تشخیص
+        stopScanning();
+        return;
+      }
+    }
+
+    // ✅ ادامه اسکن
+    animationRef.current = requestAnimationFrame(scanLoop);
+  };
+
+  // ✅ توقف اسکن
+  const stopScanning = () => {
+    setScanning(false);
+    
+    if (animationRef.current) {
+      cancelAnimationFrame(animationRef.current);
+    }
+    
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+    }
+  };
+
+  // ✅ cleanup
+  useEffect(() => {
+    return () => {
+      stopScanning();
+    };
+  }, []);
+
+  if (!capabilities.barcode) {
+    return (
+      <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+        <p className="text-sm text-yellow-800">
+          ⚠️ BarcodeDetector در این مرورگر پشتیبانی نمیشه.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-w-md mx-auto p-6 bg-white rounded-xl shadow-lg space-y-4">
+      <h3 className="font-bold text-lg">📷 اسکنر QR Code</h3>
+
+      {/* ✅ ویدیو */}
+      <div className="relative aspect-square bg-black rounded-lg overflow-hidden">
+        <video
+          ref={videoRef}
+          className="w-full h-full object-cover"
+          playsInline
+          muted
+        />
+        <canvas ref={canvasRef} className="hidden" />
+
+        {/* ✅ Overlay */}
+        {scanning && (
+          <div className="absolute inset-0 flex items-center justify-center">
+            <div className="w-64 h-64 border-4 border-white rounded-lg animate-pulse" />
+          </div>
+        )}
+      </div>
+
+      {/* ✅ دکمه‌ها */}
+      {!scanning ? (
+        <button
+          onClick={startScanning}
+          className="w-full bg-blue-600 text-white px-6 py-3 rounded-lg 
+                     hover:bg-blue-700 font-medium"
+        >
+          📷 شروع اسکن
+        </button>
+      ) : (
+        <button
+          onClick={stopScanning}
+          className="w-full bg-red-600 text-white px-6 py-3 rounded-lg 
+                     hover:bg-red-700 font-medium"
+        >
+          ⏹️ توقف اسکن
+        </button>
+      )}
+
+      {/* ✅ نتیجه */}
+      {lastResult && (
+        <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
+          <p className="text-sm font-medium text-green-800 mb-1">
+            ✅ QR Code تشخیص داده شد:
+          </p>
+          <p className="text-sm text-green-900 break-all font-mono">
+            {lastResult.rawValue}
+          </p>
+          <p className="text-xs text-green-700 mt-2">
+            فرمت: {lastResult.format}
+          </p>
+        </div>
+      )}
+
+      {error && (
+        <div role="alert" className="p-3 bg-red-50 border border-red-200 rounded-lg">
+          <p className="text-sm text-red-800">{error}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+### ۳. کامپوننت تشخیص چهره
+
+```jsx
+// components/FaceDetector.jsx
+import { useState, useRef } from 'react';
+import { useShapeDetection } from '@/hooks/useShapeDetection';
+
+export function FaceDetectorComponent() {
+  const { capabilities, detectFaces } = useShapeDetection();
+  const canvasRef = useRef(null);
+  const [faces, setFaces] = useState([]);
+  const [imageUrl, setImageUrl] = useState(null);
+
+  const handleImageUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const url = URL.createObjectURL(file);
+    setImageUrl(url);
+
+    const img = new Image();
+    img.onload = async () => {
+      const canvas = canvasRef.current;
+      const ctx = canvas.getContext('2d');
+      canvas.width = img.width;
+      canvas.height = img.height;
+      ctx.drawImage(img, 0, 0);
+
+      // ✅ تشخیص چهره
+      const detectedFaces = await detectFaces(canvas);
+      setFaces(detectedFaces);
+
+      // ✅ رسم bounding box
+      detectedFaces.forEach((face, idx) => {
+        const { x, y, width, height } = face.boundingBox;
+        ctx.strokeStyle = '#00ff00';
+        ctx.lineWidth = 3;
+        ctx.strokeRect(x, y, width, height);
+        
+        ctx.fillStyle = '#00ff00';
+        ctx.font = '20px Arial';
+        ctx.fillText(`Face ${idx + 1}`, x, y - 10);
+      });
+    };
+    img.src = url;
+  };
+
+  if (!capabilities.face) {
+    return (
+      <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+        <p className="text-sm text-yellow-800">
+          ⚠️ FaceDetector در این مرورگر پشتیبانی نمیشه.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-w-2xl mx-auto p-6 bg-white rounded-xl shadow-lg space-y-4">
+      <h3 className="font-bold text-lg">👤 تشخیص چهره</h3>
+
+      <input
+        type="file"
+        accept="image/*"
+        onChange={handleImageUpload}
+        className="w-full p-2 border border-gray-300 rounded"
+      />
+
+      {imageUrl && (
+        <div className="relative">
+          <canvas
+            ref={canvasRef}
+            className="w-full border border-gray-300 rounded-lg"
+          />
+        </div>
+      )}
+
+      {faces.length > 0 && (
+        <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
+          <p className="font-medium text-blue-800">
+            ✅ {faces.length} چهره تشخیص داده شد
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+### ۴. Fallback با کتابخانه‌های third-party
+
+```jsx
+// components/QRScannerWithFallback.jsx
+import { useState } from 'react';
+import { QRScanner } from './QRScanner';
+// ✅ Fallback: jsQR library
+// import jsQR from 'jsqr';
+
+export function QRScannerWithFallback({ onScan }) {
+  const isSupported = 'BarcodeDetector' in window;
+
+  if (!isSupported) {
+    return (
+      <div className="space-y-3">
+        <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+          <p className="text-sm text-yellow-800">
+            ⚠️ BarcodeDetector پشتیبانی نمیشه. از jsQR استفاده می‌کنیم.
+          </p>
+        </div>
+        
+        {/* ✅ اینجا می‌تونی از jsQR یا html5-qrcode استفاده کنی */}
+        <div className="p-4 bg-gray-50 rounded-lg">
+          <p className="text-sm text-gray-600">
+            💡 Fallback: از کتابخانه‌ی jsQR یا html5-qrcode استفاده کن
+          </p>
+          <a
+            href="https://github.com/cozmo/jsQR"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-blue-600 text-sm underline"
+          >
+            jsQR on GitHub
+          </a>
+        </div>
+      </div>
+    );
+  }
+
+  return <QRScanner onScan={onScan} />;
+}
+```
+
+### ۵. کامپوننت OCR (تشخیص متن)
+
+```jsx
+// components/TextRecognizer.jsx
+import { useState, useRef } from 'react';
+import { useShapeDetection } from '@/hooks/useShapeDetection';
+
+export function TextRecognizer() {
+  const { capabilities, detectText } = useShapeDetection();
+  const canvasRef = useRef(null);
+  const [recognizedText, setRecognizedText] = useState([]);
+  const [imageUrl, setImageUrl] = useState(null);
+
+  const handleImageUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const url = URL.createObjectURL(file);
+    setImageUrl(url);
+
+    const img = new Image();
+    img.onload = async () => {
+      const canvas = canvasRef.current;
+      const ctx = canvas.getContext('2d');
+      canvas.width = img.width;
+      canvas.height = img.height;
+      ctx.drawImage(img, 0, 0);
+
+      // ✅ تشخیص متن
+      const texts = await detectText(canvas);
+      setRecognizedText(texts);
+    };
+    img.src = url;
+  };
+
+  if (!capabilities.text) {
+    return (
+      <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+        <p className="text-sm text-yellow-800">
+          ⚠️ TextDetector در این مرورگر پشتیبانی نمیشه.
+        </p>
+        <p className="text-xs text-yellow-700 mt-1">
+          💡 Fallback: از Tesseract.js استفاده کن
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-w-2xl mx-auto p-6 bg-white rounded-xl shadow-lg space-y-4">
+      <h3 className="font-bold text-lg">📝 تشخیص متن (OCR)</h3>
+
+      <input
+        type="file"
+        accept="image/*"
+        onChange={handleImageUpload}
+        className="w-full p-2 border border-gray-300 rounded"
+      />
+
+      {imageUrl && (
+        <canvas
+          ref={canvasRef}
+          className="w-full border border-gray-300 rounded-lg"
+        />
+      )}
+
+      {recognizedText.length > 0 && (
+        <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
+          <p className="font-medium text-green-800 mb-2">
+            ✅ {recognizedText.length} ناحیه متنی تشخیص داده شد
+          </p>
+          <p className="text-xs text-green-700">
+            💡 TextDetector فقط bounding box برمی‌گردونه. برای متن واقعی از Tesseract.js استفاده کن.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+### ۶. اسکنر بارکد چندفرمتی
+
+```jsx
+// components/BarcodeScanner.jsx
+import { useState, useRef, useEffect } from 'react';
+import { useShapeDetection } from '@/hooks/useShapeDetection';
+
+export function BarcodeScanner({ onScan }) {
+  const { capabilities, detectBarcodes } = useShapeDetection();
+  const videoRef = useRef(null);
+  const canvasRef = useRef(null);
+  const [scanning, setScanning] = useState(false);
+  const [results, setResults] = useState([]);
+  const streamRef = useRef(null);
+
+  const startScanning = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment' },
+      });
+      
+      streamRef.current = stream;
+      videoRef.current.srcObject = stream;
+      await videoRef.current.play();
+      setScanning(true);
+      scanLoop();
+    } catch (err) {
+      console.error('Camera error:', err);
+    }
+  };
+
+  const scanLoop = async () => {
+    if (!scanning) return;
+
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    
+    if (video && canvas && video.readyState === video.HAVE_ENOUGH_DATA) {
+      const ctx = canvas.getContext('2d');
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      ctx.drawImage(video, 0, 0);
+
+      // ✅ تشخیص همه‌ی فرمت‌های بارکد
+      const barcodes = await detectBarcodes(canvas, [
+        'qr_code',
+        'ean_13',
+        'ean_8',
+        'upc_a',
+        'upc_e',
+        'code_128',
+        'code_39',
+        'codabar',
+        'itf',
+      ]);
+      
+      if (barcodes.length > 0) {
+        setResults((prev) => [...prev, ...barcodes]);
+        onScan?.(barcodes);
+        
+        if ('vibrate' in navigator) {
+          navigator.vibrate(100);
+        }
+      }
+    }
+
+    requestAnimationFrame(scanLoop);
+  };
+
+  const stopScanning = () => {
+    setScanning(false);
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+    }
+  };
+
+  useEffect(() => {
+    return () => stopScanning();
+  }, []);
+
+  return (
+    <div className="space-y-4">
+      <div className="relative aspect-video bg-black rounded-lg overflow-hidden">
+        <video ref={videoRef} className="w-full h-full object-cover" playsInline muted />
+        <canvas ref={canvasRef} className="hidden" />
+      </div>
+
+      {!scanning ? (
+        <button onClick={startScanning} className="w-full bg-blue-600 text-white px-4 py-2 rounded">
+          📷 شروع اسکن
+        </button>
+      ) : (
+        <button onClick={stopScanning} className="w-full bg-red-600 text-white px-4 py-2 rounded">
+          ⏹️ توقف
+        </button>
+      )}
+
+      {results.length > 0 && (
+        <div className="space-y-2">
+          <p className="font-medium">بارکدهای تشخیص‌داده‌شده:</p>
+          {results.map((result, idx) => (
+            <div key={idx} className="p-2 bg-gray-50 rounded text-sm">
+              <p className="font-mono break-all">{result.rawValue}</p>
+              <p className="text-xs text-gray-500">فرمت: {result.format}</p>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+**🔗 ابزار تست**
+
+- **Chrome DevTools** → Application → Shape Detection (مشاهده وضعیت).
+- **Console**: `'BarcodeDetector' in window` برای بررسی پشتیبانی.
+- **تست واقعی**: روی Chrome Android با دوربین واقعی تست کن.
+- **jsQR**: [github.com/cozmo/jsQR](https://github.com/cozmo/jsQR) برای fallback.
+- **Tesseract.js**: [tesseract.projectnaptha.com](https://tesseract.projectnaptha.com/) برای OCR fallback.
+- **face-api.js**: [github.com/justadudewhohacks/face-api.js](https://github.com/justadudewhohohacks/face-api.js) برای تشخیص چهره fallback.
+
+**⚠️ چک‌لیست نهایی**
+
+- [ ] بررسی `'BarcodeDetector' in window` قبل از استفاده؟
+- [ ] بررسی `'FaceDetector' in window` قبل از استفاده؟
+- [ ] Fallback برای مرورگرهای بدون پشتیبانی؟
+- [ ] استفاده از `requestAnimationFrame` برای اسکن زنده؟
+- [ ] cleanup stream دوربین بعد از اتمام کار؟
+- [ ] مدیریت خطای `NotSupportedError`؟
+- [ ] تست در Chrome Android واقعی؟
+- [ ] تست در Safari/Firefox (fallback)؟
+- [ ] احترام به حریم خصوصی (عدم ذخیره‌ی تصاویر بدون اجازه)؟
+
+> **قانون ۳ ثانیه‌ای:** Console رو باز کن و بنویس `'BarcodeDetector' in window`. اگه `true` بود، یعنی پشتیبانی میشه. بعد بنویس `const detector = new BarcodeDetector(); const img = new Image(); img.src = 'qr.png'; img.onload = async () => console.log(await detector.detect(img))`. باید بارکد تشخیص داده بشه. بعد Safari رو تست کن؛ باید `false` باشه و fallback کار کنه.
