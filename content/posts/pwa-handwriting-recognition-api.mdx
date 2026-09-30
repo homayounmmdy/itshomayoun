@@ -1,0 +1,566 @@
+---
+title: "PWA: Handwriting Recognition API - تشخیص دست‌خط"
+date: '2026-09-30'
+playlist: 'PWA - برنامه وب پیشرونده'
+tags: ['PWA', 'Handwriting-Recognition-API', 'Ink', 'Canvas', 'AI', 'Device-API', 'React', 'Form']
+description: "چطور با Handwriting Recognition API دست‌خط کاربر رو تشخیص بدیم، متن رو از روی canvas استخراج کنیم و فرم‌های هوشمند بسازیم."
+enableComment: true
+---
+
+# ✍️ PWA: Handwriting Recognition API - تشخیص دست‌خط
+
+**💡 مفهوم کلیدی**  
+Handwriting Recognition API به PWA اجازه میده **دست‌خط کاربر رو تشخیص بده** و به متن تبدیل کنه. کاربر روی یه canvas می‌کشه (مثل یادداشت، امضا، یا فرم) و API اون رو به متن تبدیل می‌کنه. این برای اپ‌های یادداشت‌برداری، فرم‌های لمسی، اپ‌های آموزشی و امضای دیجیتال حیاتیه.
+
+**⚠️ دام رایج**  
+- فراموش کردن `navigator.queryHandwritingRecognizer()` برای بررسی پشتیبانی.
+- عدم مدیریت `recognize()` با Promise.
+- نادیده گرفتن `alternatives` (ممکنه چند تفسیر مختلف وجود داشته باشه).
+- فراموش کردن `language` و `textContext` برای بهبود دقت.
+- عدم ارائه‌ی fallback برای مرورگرهای بدون پشتیبانی.
+- نادیده گرفتن `writingGranularity` (کلمه، خط، پاراگراف).
+- عدم مدیریت خطای `NotSupportedError`.
+- فراموش کردن cleanup canvas بعد از تشخیص.
+
+**📏 وضعیت پشتیبانی مرورگرها (خیلی محدود!)**
+
+| مرورگر       | پشتیبانی | محدودیت                                  |
+|--------------|-----------|-------------------------------------------|
+| Chrome       | ✅        | نسخه 119+ + فقط HTTPS + Android/ChromeOS |
+| Edge         | ✅        | نسخه 119+                                |
+| Opera        | ✅        | نسخه 105+                                |
+| Safari       | ❌        | **پشتیبانی نمیشه**                        |
+| iOS Safari   | ❌        | پشتیبانی نمیشه                            |
+| Firefox      | ❌        | **پشتیبانی نمیشه**                        |
+| دسکتاپ       | ⚠️        | فقط ChromeOS و بعضی نسخه‌های ویندوز      |
+
+> ⚠️ **نکته حیاتی**: این API **فقط در Chrome Android و ChromeOS** به درستی کار می‌کنه. در دسکتاپ محدودیت داره. همیشه fallback بذار!
+
+**🎯 کاربردهای واقعی**
+
+```
+✅ فرم‌های لمسی (پر کردن فرم با دست‌خط)
+✅ اپ‌های یادداشت‌برداری
+✅ امضای دیجیتال
+✅ اپ‌های آموزشی (یادگیری زبان)
+✅ تبدیل دست‌نوشته به متن
+✅ اپ‌های طراحی
+✅ چت با دست‌خط
+✅ جستجو با دست‌خط
+```
+
+**🛠️ راه‌حل سریع در کد**
+
+### ۱. هوک React برای Handwriting Recognition
+
+```jsx
+// hooks/useHandwritingRecognition.js
+import { useState, useCallback, useEffect } from 'react';
+
+export function useHandwritingRecognition() {
+  const [isSupported, setIsSupported] = useState(false);
+  const [supportedLanguages, setSupportedLanguages] = useState([]);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    const checkSupport = async () => {
+      if (!('queryHandwritingRecognizer' in navigator)) {
+        setIsSupported(false);
+        return;
+      }
+
+      try {
+        // ✅ بررسی پشتیبانی و زبان‌های موجود
+        const capabilities = await navigator.queryHandwritingRecognizer({
+          language: 'fa',
+          textContext: 'form',
+        });
+
+        if (capabilities) {
+          setIsSupported(true);
+          setSupportedLanguages(capabilities.languages || ['fa', 'en', 'ar']);
+        } else {
+          setIsSupported(false);
+        }
+      } catch (err) {
+        console.warn('Handwriting recognition not available:', err);
+        setIsSupported(false);
+      }
+    };
+
+    checkSupport();
+  }, []);
+
+  // ✅ تشخیص دست‌خط
+  const recognize = useCallback(async (inkData, options = {}) => {
+    if (!isSupported) {
+      setError('Handwriting Recognition پشتیبانی نمیشه');
+      return null;
+    }
+
+    try {
+      setError(null);
+
+      // ✅ ساخت request
+      const request = {
+        ink: inkData,
+        language: options.language || 'fa',
+        textContext: options.textContext || 'form',
+        writingGranularity: options.granularity || 'word',
+      };
+
+      // ✅ تشخیص
+      const response = await navigator.queryHandwritingRecognizer(request);
+
+      if (response && response.segments) {
+        // ✅ برگرداندن بهترین نتیجه
+        return {
+          text: response.segments.map(s => s.text).join(' '),
+          alternatives: response.segments,
+          confidence: response.confidence || 0,
+        };
+      }
+
+      return null;
+    } catch (err) {
+      setError(err.message);
+      console.error('Handwriting recognition error:', err);
+      return null;
+    }
+  }, [isSupported]);
+
+  return {
+    isSupported,
+    supportedLanguages,
+    error,
+    recognize,
+  };
+}
+```
+
+### ۲. هوک Canvas برای رسم دست‌خط
+
+```jsx
+// hooks/useInkCanvas.js
+import { useState, useRef, useCallback } from 'react';
+
+export function useInkCanvas() {
+  const canvasRef = useRef(null);
+  const [isDrawing, setIsDrawing] = useState(false);
+  const [strokes, setStrokes] = useState([]);
+  const currentStrokeRef = useRef([]);
+
+  // ✅ شروع رسم
+  const startDrawing = useCallback((e) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const x = (e.clientX || e.touches[0].clientX) - rect.left;
+    const y = (e.clientY || e.touches[0].clientY) - rect.top;
+
+    setIsDrawing(true);
+    currentStrokeRef.current = [{
+      x,
+      y,
+      t: Date.now(),
+    }];
+
+    const ctx = canvas.getContext('2d');
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+  }, []);
+
+  // ✅ ادامه رسم
+  const draw = useCallback((e) => {
+    if (!isDrawing) return;
+
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const x = (e.clientX || e.touches[0].clientX) - rect.left;
+    const y = (e.clientY || e.touches[0].clientY) - rect.top;
+
+    currentStrokeRef.current.push({
+      x,
+      y,
+      t: Date.now(),
+    });
+
+    const ctx = canvas.getContext('2d');
+    ctx.lineTo(x, y);
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
+    ctx.stroke();
+  }, [isDrawing]);
+
+  // ✅ پایان رسم
+  const stopDrawing = useCallback(() => {
+    if (currentStrokeRef.current.length > 0) {
+      setStrokes((prev) => [...prev, currentStrokeRef.current]);
+    }
+    currentStrokeRef.current = [];
+    setIsDrawing(false);
+  }, []);
+
+  // ✅ پاک کردن canvas
+  const clear = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    setStrokes([]);
+  }, []);
+
+  // ✅ تبدیل به ink data format
+  const getInkData = useCallback(() => {
+    return {
+      strokes: strokes.map((stroke) => ({
+        points: stroke.map((p) => [p.x, p.y, p.t]),
+      })),
+    };
+  }, [strokes]);
+
+  return {
+    canvasRef,
+    strokes,
+    clear,
+    getInkData,
+    handlers: {
+      onMouseDown: startDrawing,
+      onMouseMove: draw,
+      onMouseUp: stopDrawing,
+      onMouseLeave: stopDrawing,
+      onTouchStart: startDrawing,
+      onTouchMove: draw,
+      onTouchEnd: stopDrawing,
+    },
+  };
+}
+```
+
+### ۳. کامپوننت تشخیص دست‌خط
+
+```jsx
+// components/HandwritingInput.jsx
+import { useState } from 'react';
+import { useHandwritingRecognition } from '@/hooks/useHandwritingRecognition';
+import { useInkCanvas } from '@/hooks/useInkCanvas';
+
+export function HandwritingInput({ onRecognized, placeholder = 'اینجا بنویسید...' }) {
+  const { isSupported, supportedLanguages, error, recognize } = useHandwritingRecognition();
+  const { canvasRef, clear, getInkData, handlers } = useInkCanvas();
+  const [recognizedText, setRecognizedText] = useState('');
+  const [isRecognizing, setIsRecognizing] = useState(false);
+  const [language, setLanguage] = useState('fa');
+
+  const handleRecognize = async () => {
+    const inkData = getInkData();
+    
+    if (inkData.strokes.length === 0) {
+      alert('لطفاً اول چیزی بنویسید');
+      return;
+    }
+
+    setIsRecognizing(true);
+    const result = await recognize(inkData, { language });
+    setIsRecognizing(false);
+
+    if (result) {
+      setRecognizedText(result.text);
+      onRecognized?.(result.text);
+    }
+  };
+
+  if (!isSupported) {
+    return (
+      <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+        <p className="text-sm text-yellow-800">
+          ⚠️ Handwriting Recognition در این مرورگر پشتیبانی نمیشه.
+        </p>
+        <p className="text-xs text-yellow-700 mt-1">
+          لطفاً از Chrome Android یا ChromeOS استفاده کنید.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-w-md mx-auto p-6 bg-white rounded-xl shadow-lg space-y-4">
+      <h3 className="font-bold text-lg">✍️ تشخیص دست‌خط</h3>
+
+      {/* ✅ انتخاب زبان */}
+      <div>
+        <label className="block text-sm font-medium mb-1">زبان</label>
+        <select
+          value={language}
+          onChange={(e) => setLanguage(e.target.value)}
+          className="w-full p-2 border border-gray-300 rounded"
+        >
+          <option value="fa">فارسی</option>
+          <option value="en">English</option>
+          <option value="ar">العربية</option>
+          <option value="zh">中文</option>
+        </select>
+      </div>
+
+      {/* ✅ Canvas برای رسم */}
+      <div className="border-2 border-dashed border-gray-300 rounded-lg overflow-hidden">
+        <canvas
+          ref={canvasRef}
+          width={400}
+          height={200}
+          className="w-full bg-white cursor-crosshair touch-none"
+          {...handlers}
+        />
+      </div>
+
+      {/* ✅ دکمه‌ها */}
+      <div className="flex gap-2">
+        <button
+          onClick={handleRecognize}
+          disabled={isRecognizing}
+          className="flex-1 bg-blue-600 text-white px-4 py-2 rounded-lg 
+                     hover:bg-blue-700 disabled:opacity-50"
+        >
+          {isRecognizing ? 'در حال تشخیص...' : '🔍 تشخیص'}
+        </button>
+        <button
+          onClick={clear}
+          className="flex-1 bg-gray-200 text-gray-800 px-4 py-2 rounded-lg 
+                     hover:bg-gray-300"
+        >
+          🗑️ پاک کردن
+        </button>
+      </div>
+
+      {/* ✅ نتیجه */}
+      {recognizedText && (
+        <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
+          <p className="text-sm font-medium text-green-800 mb-1">متن تشخیص‌داده‌شده:</p>
+          <p className="text-lg text-green-900">{recognizedText}</p>
+        </div>
+      )}
+
+      {error && (
+        <div role="alert" className="p-3 bg-red-50 border border-red-200 rounded-lg">
+          <p className="text-sm text-red-800">{error}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+### ۴. استفاده در فرم
+
+```jsx
+// components/HandwritingForm.jsx
+import { useState } from 'react';
+import { HandwritingInput } from './HandwritingInput';
+
+export function HandwritingForm() {
+  const [formData, setFormData] = useState({
+    name: '',
+    email: '',
+    message: '',
+  });
+
+  const handleFieldRecognized = (field, text) => {
+    setFormData((prev) => ({ ...prev, [field]: text }));
+  };
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    alert(`فرم ارسال شد:\n${JSON.stringify(formData, null, 2)}`);
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="max-w-2xl mx-auto p-6 bg-white rounded-xl shadow-lg space-y-6">
+      <h2 className="text-2xl font-bold">📝 فرم با دست‌خط</h2>
+
+      {/* ✅ فیلد نام */}
+      <div>
+        <label className="block text-sm font-medium mb-2">نام</label>
+        <HandwritingInput
+          onRecognized={(text) => handleFieldRecognized('name', text)}
+          placeholder="نام خود را بنویسید..."
+        />
+        {formData.name && (
+          <input type="text" value={formData.name} readOnly className="mt-2 w-full p-2 border rounded bg-gray-50" />
+        )}
+      </div>
+
+      {/* ✅ فیلد ایمیل */}
+      <div>
+        <label className="block text-sm font-medium mb-2">ایمیل</label>
+        <HandwritingInput
+          onRecognized={(text) => handleFieldRecognized('email', text)}
+          placeholder="ایمیل خود را بنویسید..."
+        />
+        {formData.email && (
+          <input type="email" value={formData.email} readOnly className="mt-2 w-full p-2 border rounded bg-gray-50" />
+        )}
+      </div>
+
+      {/* ✅ فیلد پیام */}
+      <div>
+        <label className="block text-sm font-medium mb-2">پیام</label>
+        <HandwritingInput
+          onRecognized={(text) => handleFieldRecognized('message', text)}
+          placeholder="پیام خود را بنویسید..."
+        />
+        {formData.message && (
+          <textarea value={formData.message} readOnly rows={3} className="mt-2 w-full p-2 border rounded bg-gray-50" />
+        )}
+      </div>
+
+      <button
+        type="submit"
+        className="w-full bg-green-600 text-white px-6 py-3 rounded-lg hover:bg-green-700 font-medium"
+      >
+        📤 ارسال فرم
+      </button>
+    </form>
+  );
+}
+```
+
+### ۵. Fallback برای مرورگرهای بدون پشتیبانی
+
+```jsx
+// components/HandwritingWithFallback.jsx
+import { useState } from 'react';
+
+export function HandwritingWithFallback({ onRecognized }) {
+  const [isSupported] = useState('queryHandwritingRecognizer' in navigator);
+  const [manualText, setManualText] = useState('');
+
+  if (!isSupported) {
+    return (
+      <div className="space-y-3">
+        <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+          <p className="text-sm text-yellow-800">
+            ⚠️ Handwriting Recognition پشتیبانی نمیشه. لطفاً دستی وارد کنید.
+          </p>
+        </div>
+        
+        <textarea
+          value={manualText}
+          onChange={(e) => setManualText(e.target.value)}
+          placeholder="متن را اینجا وارد کنید..."
+          rows={4}
+          className="w-full p-3 border border-gray-300 rounded-lg"
+        />
+        
+        <button
+          onClick={() => onRecognized?.(manualText)}
+          className="w-full bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700"
+        >
+          تأیید
+        </button>
+      </div>
+    );
+  }
+
+  return <HandwritingInput onRecognized={onRecognized} />;
+}
+```
+
+### ۶. کامپوننت امضای دیجیتال
+
+```jsx
+// components/DigitalSignature.jsx
+import { useState } from 'react';
+import { useInkCanvas } from '@/hooks/useInkCanvas';
+
+export function DigitalSignature({ onSigned }) {
+  const { canvasRef, clear, getInkData, handlers } = useInkCanvas();
+  const [isSigned, setIsSigned] = useState(false);
+
+  const handleConfirm = () => {
+    const inkData = getInkData();
+    
+    if (inkData.strokes.length === 0) {
+      alert('لطفاً اول امضا کنید');
+      return;
+    }
+
+    // ✅ تبدیل canvas به image
+    const canvas = canvasRef.current;
+    const dataUrl = canvas.toDataURL('image/png');
+    
+    setIsSigned(true);
+    onSigned?.({
+      ink: inkData,
+      image: dataUrl,
+      timestamp: Date.now(),
+    });
+  };
+
+  return (
+    <div className="max-w-md mx-auto p-6 bg-white rounded-xl shadow-lg space-y-4">
+      <h3 className="font-bold text-lg">✍️ امضای دیجیتال</h3>
+
+      <div className="border-2 border-gray-300 rounded-lg overflow-hidden bg-gray-50">
+        <canvas
+          ref={canvasRef}
+          width={400}
+          height={150}
+          className="w-full cursor-crosshair touch-none"
+          {...handlers}
+        />
+      </div>
+
+      <div className="flex gap-2">
+        <button
+          onClick={handleConfirm}
+          disabled={isSigned}
+          className="flex-1 bg-green-600 text-white px-4 py-2 rounded-lg 
+                     hover:bg-green-700 disabled:opacity-50"
+        >
+          {isSigned ? '✅ امضا شد' : '✅ تأیید امضا'}
+        </button>
+        <button
+          onClick={clear}
+          className="flex-1 bg-gray-200 text-gray-800 px-4 py-2 rounded-lg 
+                     hover:bg-gray-300"
+        >
+          🗑️ پاک کردن
+        </button>
+      </div>
+
+      {isSigned && (
+        <p className="text-sm text-green-600 text-center">
+          امضای شما با موفقیت ثبت شد
+        </p>
+      )}
+    </div>
+  );
+}
+```
+
+**🔗 ابزار تست**
+
+- **Chrome Android**: سایت رو روی موبایل اندروید با Chrome باز کن.
+- **Console**: `'queryHandwritingRecognizer' in navigator` برای بررسی پشتیبانی.
+- **Chrome DevTools** → Sensors → Handwriting (شبیه‌سازی).
+- **تست واقعی**: روی canvas با انگشت یا stylus بنویس و تشخیص بده.
+- **Safari/Firefox**: تست کن که fallback درست کار می‌کنه.
+
+**⚠️ چک‌لیست نهایی**
+
+- [ ] بررسی `'queryHandwritingRecognizer' in navigator` قبل از استفاده؟
+- [ ] درخواست language مناسب برای دقت بهتر؟
+- [ ] مدیریت `alternatives` برای چند تفسیر؟
+- [ ] Fallback برای مرورگرهای بدون پشتیبانی؟
+- [ ] Canvas با touch events درست کار می‌کنه؟
+- [ ] cleanup canvas بعد از تشخیص؟
+- [ ] تست در Chrome Android واقعی؟
+- [ ] تست در Safari/Firefox (fallback)؟
+- [ ] احترام به حریم خصوصی (عدم ذخیره‌ی دست‌خط بدون اجازه)؟
+
+> **قانون ۳ ثانیه‌ای:** Console رو باز کن و بنویس `'queryHandwritingRecognizer' in navigator`. اگه `true` بود، یعنی پشتیبانی میشه. بعد یه canvas بساز، روش بنویس و `navigator.queryHandwritingRecognizer()` رو صدا بزن. آیا متن تشخیص داده میشه؟ بعد Safari رو تست کن؛ باید `false` باشه و fallback کار کنه.
