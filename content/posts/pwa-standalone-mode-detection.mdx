@@ -1,0 +1,410 @@
+---
+title: "PWA: تشخیص اجرای اپ در حالت Standalone"
+date: "2026-10-01"
+playlist: "PWA - برنامه وب پیشرونده"
+tags:
+  ["PWA", "Standalone-Mode", "display-mode", "iOS", "Desktop", "React", "UX"]
+description: "چطور بفهمیم PWA در حالت standalone (نصب‌شده) اجرا میشه یا در مرورگر، چرا این تشخیص برای UX حیاتیه و چطور بین iOS، اندروید و دسکتاپ تفاوت قائل بشیم."
+enableComment: true
+---
+
+# 🕵️ PWA: تشخیص اجرای اپ در حالت Standalone
+
+**💡 مفهوم کلیدی**  
+وقتی کاربر PWA رو نصب می‌کنه و از هوم اسکرین (یا Start Menu) باز می‌کنه، سایت شما دیگه یه "وب‌سایت" نیست، یه **"اپلیکیشن مستقل"** هست. تشخیص این حالت به شما اجازه میده:
+
+- دکمه‌ی Install رو مخفی کنید
+- منوی مخصوص اپ (بدون header مرورگر) نشون بدید
+- UX متفاوتی ارائه بدید
+- در Analytics ترافیک اپ رو از وب جدا کنید
+
+**⚠️ دام رایج**
+
+- فقط یک‌بار در `useEffect` اول چک کردن (تغییر حالت رو نمی‌گیره!).
+- نادیده گرفتن iOS Safari که `display-mode` رو به شکل متفاوتی گزارش می‌کنه.
+- فراموش کردن `window-controls-overlay` برای PWAهای نصب‌شده روی ویندوز.
+- عدم استفاده از URL parameter برای ردیابی در Analytics.
+- نشون دادن دکمه‌ی Install به کاربری که **قبلاً نصب کرده**.
+- تکیه فقط بر User Agent (غیرقابل اعتماد!).
+
+**📏 روش‌های تشخیص نصب**
+
+| روش                                     | اندروید | iOS | دسکتاپ | قابل اعتماد؟  |
+| --------------------------------------- | ------- | --- | ------ | ------------- |
+| `display-mode: standalone`              | ✅      | ❌  | ✅     | بله (بیشتر)   |
+| `display-mode: window-controls-overlay` | ❌      | ❌  | ✅     | فقط ویندوز    |
+| `display-mode: minimal-ui`              | ✅      | ❌  | ❌     | بعضی مرورگرها |
+| `display-mode: fullscreen`              | ✅      | ❌  | ✅     | بله           |
+| `navigator.standalone`                  | ❌      | ✅  | ❌     | فقط iOS       |
+| URL parameter (`?utm_source=pwa`)       | ✅      | ✅  | ✅     | بله           |
+
+> ⚠️ **نکته حیاتی**: برای پوشش کامل، باید **چند روش رو ترکیب کنید**. هیچ روشی به تنهایی در همه پلتفرم‌ها کار نمی‌کنه.
+
+**🛠️ راه‌حل سریع در کد**
+
+### ۱. هوک کامل تشخیص نصب
+
+```jsx
+// hooks/useIsAppInstalled.js
+import { useState, useEffect } from "react";
+
+export function useIsAppInstalled() {
+  const [isInstalled, setIsInstalled] = useState(false);
+  const [platform, setPlatform] = useState("browser"); // browser | android | ios | desktop
+  const [displayMode, setDisplayMode] = useState("browser");
+
+  useEffect(() => {
+    const checkInstallation = () => {
+      // ✅ روش ۱: display-mode (اندروید و دسکتاپ)
+      const isStandalone = window.matchMedia(
+        "(display-mode: standalone)",
+      ).matches;
+
+      // ✅ روش ۲: window-controls-overlay (ویندوز)
+      const isWindowControlsOverlay = window.matchMedia(
+        "(display-mode: window-controls-overlay)",
+      ).matches;
+
+      // ✅ روش ۳: fullscreen mode
+      const isFullscreen = window.matchMedia(
+        "(display-mode: fullscreen)",
+      ).matches;
+
+      // ✅ روش ۴: minimal-ui (بعضی مرورگرهای اندروید)
+      const isMinimalUI = window.matchMedia(
+        "(display-mode: minimal-ui)",
+      ).matches;
+
+      // ✅ روش ۵: navigator.standalone (iOS Safari)
+      const isIOSStandalone = window.navigator.standalone === true;
+
+      // ✅ روش ۶: URL parameter (قابل اعتمادترین برای Analytics)
+      const urlParams = new URLSearchParams(window.location.search);
+      const isFromPWA =
+        urlParams.get("utm_source") === "pwa" ||
+        urlParams.get("utm_display") === "standalone";
+
+      const installed =
+        isStandalone ||
+        isWindowControlsOverlay ||
+        isFullscreen ||
+        isMinimalUI ||
+        isIOSStandalone ||
+        isFromPWA;
+
+      setIsInstalled(installed);
+
+      // ✅ تشخیص display mode فعلی
+      if (isWindowControlsOverlay) {
+        setDisplayMode("window-controls-overlay");
+      } else if (isStandalone) {
+        setDisplayMode("standalone");
+      } else if (isFullscreen) {
+        setDisplayMode("fullscreen");
+      } else if (isMinimalUI) {
+        setDisplayMode("minimal-ui");
+      } else {
+        setDisplayMode("browser");
+      }
+
+      // ✅ تشخیص پلتفرم
+      if (isIOSStandalone || /iPad|iPhone|iPod/.test(navigator.userAgent)) {
+        setPlatform("ios");
+      } else if (
+        (isStandalone || isMinimalUI) &&
+        /Android/.test(navigator.userAgent)
+      ) {
+        setPlatform("android");
+      } else if (isStandalone || isWindowControlsOverlay || isFullscreen) {
+        setPlatform("desktop");
+      } else {
+        setPlatform("browser");
+      }
+    };
+
+    checkInstallation();
+
+    // ✅ گوش دادن به تغییر حالت (مثلاً بعد از نصب)
+    const mediaQueries = [
+      window.matchMedia("(display-mode: standalone)"),
+      window.matchMedia("(display-mode: window-controls-overlay)"),
+      window.matchMedia("(display-mode: fullscreen)"),
+      window.matchMedia("(display-mode: minimal-ui)"),
+    ];
+
+    mediaQueries.forEach((mq) => {
+      mq.addEventListener("change", checkInstallation);
+    });
+
+    // ✅ گوش دادن به event نصب
+    const handleInstalled = () => setIsInstalled(true);
+    window.addEventListener("appinstalled", handleInstalled);
+
+    return () => {
+      mediaQueries.forEach((mq) => {
+        mq.removeEventListener("change", checkInstallation);
+      });
+      window.removeEventListener("appinstalled", handleInstalled);
+    };
+  }, []);
+
+  return { isInstalled, platform, displayMode };
+}
+```
+
+### ۲. کامپوننت‌های شرطی
+
+```jsx
+// components/ConditionalRender.jsx
+import { useIsAppInstalled } from "@/hooks/useIsAppInstalled";
+
+// ✅ فقط در مرورگر نمایش بده
+export function ShowOnlyInBrowser({ children }) {
+  const { isInstalled } = useIsAppInstalled();
+  return isInstalled ? null : <>{children}</>;
+}
+
+// ✅ فقط در اپ نصب‌شده نمایش بده
+export function ShowOnlyInApp({ children }) {
+  const { isInstalled } = useIsAppInstalled();
+  return isInstalled ? <>{children}</> : null;
+}
+
+// ✅ فقط در پلتفرم خاص
+export function ShowOnlyOnPlatform({ platform, children }) {
+  const { platform: currentPlatform } = useIsAppInstalled();
+  return currentPlatform === platform ? <>{children}</> : null;
+}
+
+// ✅ استفاده:
+function AppHeader() {
+  return (
+    <header>
+      <ShowOnlyInBrowser>
+        <InstallBanner>اپ ما رو نصب کن!</InstallBanner>
+        <WebNavigation />
+      </ShowOnlyInBrowser>
+
+      <ShowOnlyInApp>
+        <AppNavigation />
+        <OfflineIndicator />
+      </ShowOnlyInApp>
+    </header>
+  );
+}
+```
+
+### ۳. CSS برای حالت‌های مختلف
+
+```css
+/* ✅ مخفی کردن عناصر وب در حالت standalone */
+@media (display-mode: standalone) {
+  .web-only-header {
+    display: none;
+  }
+
+  .app-only-footer {
+    display: block;
+  }
+
+  /* ✅ padding بیشتر برای title bar ویندوز */
+  body {
+    padding-top: env(titlebar-area-height, 0);
+  }
+}
+
+/* ✅ استایل مخصوص window-controls-overlay (ویندوز) */
+@media (display-mode: window-controls-overlay) {
+  .title-bar {
+    padding-top: env(titlebar-area-height, 0);
+    padding-left: env(titlebar-area-x, 0);
+  }
+
+  /* ✅ فضای خالی برای دکمه‌های minimize/maximize/close */
+  .app-content {
+    margin-right: 138px; /* عرض دکمه‌های ویندوز */
+  }
+}
+
+/* ✅ استایل مخصوص fullscreen */
+@media (display-mode: fullscreen) {
+  .fullscreen-only {
+    display: block;
+  }
+}
+
+/* ✅ استایل مخصوص iOS */
+@supports (-webkit-touch-callout: none) {
+  .ios-specific {
+    /* استایل مخصوص iOS */
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+}
+```
+
+### ۴. استفاده در manifest.json
+
+```json
+// public/manifest.json
+{
+  "name": "فروشگاه من",
+  "short_name": "فروشگاه",
+  "start_url": "/?utm_source=pwa&utm_display=standalone",
+  "display": "standalone",
+  "display_override": [
+    "window-controls-overlay",
+    "standalone",
+    "minimal-ui",
+    "browser"
+  ]
+}
+```
+
+### ۵. ردیابی در Analytics
+
+```jsx
+// hooks/useAppAnalytics.js
+import { useEffect } from "react";
+import { useIsAppInstalled } from "./useIsAppInstalled";
+
+export function useAppAnalytics() {
+  const { isInstalled, platform, displayMode } = useIsAppInstalled();
+
+  useEffect(() => {
+    if (isInstalled) {
+      // ✅ ارسال event به Analytics
+      if (typeof gtag !== "undefined") {
+        gtag("event", "app_launched", {
+          platform: platform,
+          display_mode: displayMode,
+          app_version: "1.0.0",
+        });
+      }
+
+      // ✅ یا ارسال به سرویس دلخواه
+      fetch("/api/analytics/app-launch", {
+        method: "POST",
+        body: JSON.stringify({
+          platform,
+          displayMode,
+          timestamp: Date.now(),
+        }),
+      });
+    }
+  }, [isInstalled, platform, displayMode]);
+
+  return { isInstalled, platform, displayMode };
+}
+```
+
+### ۶. کامپوننت تشخیص پیشرفته با دیباگ
+
+```jsx
+// components/AppModeDebugger.jsx
+import { useIsAppInstalled } from "@/hooks/useIsAppInstalled";
+
+export function AppModeDebugger() {
+  const { isInstalled, platform, displayMode } = useIsAppInstalled();
+
+  if (process.env.NODE_ENV !== "development") return null;
+
+  return (
+    <div className="fixed bottom-4 left-4 bg-black text-white p-3 rounded-lg text-xs font-mono z-50">
+      <p>
+        Installed: <strong>{isInstalled ? "✅" : "❌"}</strong>
+      </p>
+      <p>
+        Platform: <strong>{platform}</strong>
+      </p>
+      <p>
+        Display Mode: <strong>{displayMode}</strong>
+      </p>
+    </div>
+  );
+}
+```
+
+### ۷. تغییر UX بر اساس حالت
+
+```jsx
+// components/AdaptiveNavigation.jsx
+import { useIsAppInstalled } from "@/hooks/useIsAppInstalled";
+
+export function AdaptiveNavigation() {
+  const { isInstalled, platform } = useIsAppInstalled();
+
+  if (!isInstalled) {
+    // ✅ منوی وب با header کامل
+    return (
+      <nav className="bg-white shadow-md">
+        <div className="container mx-auto px-4 py-3 flex items-center justify-between">
+          <Logo />
+          <WebMenu />
+          <InstallButton />
+        </div>
+      </nav>
+    );
+  }
+
+  if (platform === "ios") {
+    // ✅ منوی مخصوص iOS با safe area
+    return (
+      <nav className="bg-white border-b safe-area-top">
+        <div className="px-4 py-3">
+          <Logo />
+          <IOSBottomNavigation />
+        </div>
+      </nav>
+    );
+  }
+
+  if (platform === "desktop") {
+    // ✅ منوی دسکتاپ با title bar
+    return (
+      <nav className="bg-gray-900 text-white title-bar">
+        <div className="px-4 py-2 flex items-center">
+          <Logo />
+          <DesktopSidebar />
+        </div>
+      </nav>
+    );
+  }
+
+  // ✅ منوی اندروید
+  return (
+    <nav className="bg-blue-600 text-white">
+      <div className="px-4 py-3">
+        <Logo />
+        <AndroidBottomNavigation />
+      </div>
+    </nav>
+  );
+}
+```
+
+**🔗 ابزار تست**
+
+- **Chrome DevTools** → Rendering → Emulate CSS media feature `display-mode: standalone`.
+- **DevTools** → Application → Manifest → بررسی `display` و `display_override`.
+- **Console**: `window.matchMedia('(display-mode: standalone)').matches` باید `true` باشه در حالت standalone.
+- **iOS**: نصب روی هوم اسکرین → `window.navigator.standalone` باید `true` باشه.
+- **ویندوز**: نصب PWA → `display-mode: window-controls-overlay` باید فعال باشه.
+- **تست واقعی**: روی اندروید، iOS و ویندوز واقعی نصب کن و تست کن.
+
+**⚠️ چک‌لیست نهایی**
+
+- [ ] هوک React برای تشخیص standalone پیاده‌سازی شده؟
+- [ ] iOS با `navigator.standalone` پوشش داده شده؟
+- [ ] ویندوز با `window-controls-overlay` پوشش داده شده؟
+- [ ] گوش دادن به `change` event برای تشخیص تغییر حالت؟
+- [ ] گوش دادن به `appinstalled` event؟
+- [ ] URL parameter در `start_url` ست شده؟
+- [ ] CSS media queries برای حالت‌های مختلف نوشته شده؟
+- [ ] کامپوننت‌های شرطی (ShowOnlyInBrowser/ShowOnlyInApp) ساختی؟
+- [ ] در Analytics ترافیک اپ رو جدا کردی؟
+- [ ] در iOS Safari واقعی تست کردی؟
+- [ ] در Android Chrome واقعی تست کردی؟
+- [ ] در ویندوز (Edge/Chrome) واقعی تست کردی؟
+
+> **قانون ۳ ثانیه‌ای:** PWA رو روی اندروید نصب کن و از هوم اسکرین باز کن. Console رو باز کن و بنویس `window.matchMedia('(display-mode: standalone)').matches`. اگه `false` بود، یعنی تشخیص درست کار نمی‌کنه! بعد همون کار رو روی iPhone انجام بده و `window.navigator.standalone` رو چک کن. باید `true` باشه. اگه نبود، یعنی iOS support نداری!

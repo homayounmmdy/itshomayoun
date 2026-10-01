@@ -1,0 +1,325 @@
+---
+title: "PWA: Tabbed App Bar و تب‌های داخلی در حالت Standalone"
+date: '2026-10-01'
+playlist: 'PWA - برنامه وب پیشرونده'
+tags: ['PWA', 'Tabbed-App-Bar', 'Standalone', 'Window-Controls-Overlay', 'Chrome', 'UX', 'React']
+description: "چطور با Tabbed App Bar در PWA تب‌های داخلی بسازیم، چرا این قابلیت تجربه‌ی اپ‌مانند رو تقویت می‌کنه و چطور با Window Controls Overlay ترکیبش کنیم."
+enableComment: true
+---
+
+# 📑 PWA: Tabbed App Bar و تب‌های داخلی در حالت Standalone
+
+**💡 مفهوم کلیدی**  
+Tabbed App Bar یه قابلیت Chrome (نسخه 117+) هست که به PWA اجازه میده **تب‌های داخلی** داشته باشه — دقیقاً مثل مرورگر، ولی داخل خود اپ. وقتی کاربر لینک جدیدی رو باز می‌کنه، به جای باز شدن در مرورگر خارجی، **یه تب جدید داخل PWA** باز میشه. این یعنی تجربه‌ی کاملاً اپ‌مانند بدون خروج از اپ.
+
+**⚠️ دام رایج**  
+- فراموش کردن `tab_strip` در manifest (بدون اون فعال نمیشه!).
+- عدم تنظیم `scope` درست (لینک‌های خارج از scope در مرورگر باز میشن).
+- نادیده گرفتن `window-controls-overlay` که معمولاً همراه Tabbed App Bar استفاده میشه.
+- عدم تست در نسخه‌های قدیمی Chrome (قبل از 117).
+- فراموش کردن `display_override` (اگه `tab_strip` پشتیبانی نشه، fallback به standalone).
+- عدم مدیریت `new_tab_url` (صفحه‌ی پیش‌فرض تب جدید).
+- نادیده گرفتن اینکه این قابلیت **فقط در Chrome دسکتاپ** کار می‌کنه.
+
+**📏 وضعیت پشتیبانی مرورگرها**
+
+| مرورگر       | پشتیبانی | محدودیت                                  |
+|--------------|-----------|-------------------------------------------|
+| Chrome       | ✅        | نسخه 117+ + فقط دسکتاپ + origin trial    |
+| Edge         | 🚧        | در حال بررسی                              |
+| Safari       | ❌        | پشتیبانی نمیشه                            |
+| Firefox      | ❌        | پشتیبانی نمیشه                            |
+| موبایل       | ❌        | فقط دسکتاپ                                |
+
+> ⚠️ **نکته حیاتی**: این قابلیت **فقط در Chrome دسکتاپ** (نسخه 117+) کار می‌کنه و هنوز در مرحله‌ی origin trial هست. همیشه fallback بذار!
+
+**🛠️ راه‌حل سریع در کد**
+
+### ۱. تنظیمات manifest.json
+
+```json
+// public/manifest.json
+{
+  "name": "فروشگاه من",
+  "short_name": "فروشگاه",
+  "start_url": "/?utm_source=pwa",
+  "scope": "/",
+  "display": "standalone",
+  
+  // ✅ fallback chain: اگه tab_strip پشتیبانی نشه، standalone استفاده میشه
+  "display_override": ["tabbed", "window-controls-overlay", "standalone", "browser"],
+  
+  // ✅ تنظیمات Tabbed App Bar
+  "tab_strip": {
+    "new_tab_url": "/new-tab",
+    "color_scheme": "light"
+  },
+  
+  "background_color": "#ffffff",
+  "theme_color": "#2563eb",
+  "icons": [
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}
+```
+
+### ۲. صفحه‌ی تب جدید (new_tab_url)
+
+```jsx
+// app/new-tab/page.jsx
+export default function NewTabPage() {
+  return (
+    <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-8">
+      <h1 className="text-3xl font-bold text-gray-900 mb-4">
+        تب جدید
+      </h1>
+      <p className="text-gray-600 mb-8">
+        چه کاری می‌خوای انجام بدی؟
+      </p>
+      
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 max-w-2xl">
+        <QuickLink href="/products" icon="🛍️" label="محصولات" />
+        <QuickLink href="/search" icon="🔍" label="جستجو" />
+        <QuickLink href="/cart" icon="🛒" label="سبد خرید" />
+        <QuickLink href="/profile" icon="👤" label="پروفایل" />
+      </div>
+    </div>
+  );
+}
+
+function QuickLink({ href, icon, label }) {
+  return (
+    <a
+      href={href}
+      className="flex flex-col items-center p-6 bg-white rounded-xl shadow-sm 
+                 hover:shadow-md transition-shadow border border-gray-100"
+    >
+      <span className="text-3xl mb-2">{icon}</span>
+      <span className="text-sm font-medium text-gray-700">{label}</span>
+    </a>
+  );
+}
+```
+
+### ۳. ترکیب با Window Controls Overlay
+
+```json
+// public/manifest.json (نسخه کامل)
+{
+  "display_override": ["tabbed", "window-controls-overlay", "standalone", "browser"],
+  
+  "tab_strip": {
+    "new_tab_url": "/new-tab"
+  }
+}
+```
+
+```css
+/* ✅ استایل برای Window Controls Overlay */
+@media (display-mode: window-controls-overlay) {
+  /* ✅ فضای خالی برای دکمه‌های minimize/maximize/close */
+  .title-bar {
+    padding-top: env(titlebar-area-height, 0);
+    padding-left: env(titlebar-area-x, 0);
+    padding-right: calc(100% - env(titlebar-area-width, 100%) - env(titlebar-area-x, 0px));
+    -webkit-app-region: drag;
+  }
+
+  .title-bar button,
+  .title-bar a,
+  .title-bar input {
+    -webkit-app-region: no-drag;
+  }
+}
+
+/* ✅ استایل برای Tabbed mode */
+@media (display-mode: tabbed) {
+  .tabbed-header {
+    display: flex;
+  }
+  
+  /* ✅ در حالت tabbed، header ساده‌تر */
+  .app-header {
+    padding-top: 0; /* تب‌ها خودشون بالا هستن */
+  }
+}
+```
+
+### ۴. هوک تشخیص حالت Tabbed
+
+```jsx
+// hooks/useDisplayMode.js
+import { useState, useEffect } from 'react';
+
+export function useDisplayMode() {
+  const [displayMode, setDisplayMode] = useState('browser');
+
+  useEffect(() => {
+    const modes = [
+      'tabbed',
+      'window-controls-overlay',
+      'standalone',
+      'minimal-ui',
+      'fullscreen',
+      'browser',
+    ];
+
+    const checkMode = () => {
+      for (const mode of modes) {
+        if (window.matchMedia(`(display-mode: ${mode})`).matches) {
+          setDisplayMode(mode);
+          return;
+        }
+      }
+      setDisplayMode('browser');
+    };
+
+    checkMode();
+
+    // ✅ گوش دادن به تغییرات
+    const mediaQueries = modes.map((mode) => {
+      const mq = window.matchMedia(`(display-mode: ${mode})`);
+      mq.addEventListener('change', checkMode);
+      return mq;
+    });
+
+    return () => {
+      mediaQueries.forEach((mq, i) => {
+        mq.removeEventListener('change', checkMode);
+      });
+    };
+  }, []);
+
+  return {
+    displayMode,
+    isTabbed: displayMode === 'tabbed',
+    isWindowControlsOverlay: displayMode === 'window-controls-overlay',
+    isStandalone: displayMode === 'standalone',
+    isInstalled: ['tabbed', 'window-controls-overlay', 'standalone', 'fullscreen', 'minimal-ui'].includes(displayMode),
+  };
+}
+```
+
+### ۵. هدر تطبیقی
+
+```jsx
+// components/AdaptiveHeader.jsx
+import { useDisplayMode } from '@/hooks/useDisplayMode';
+
+export function AdaptiveHeader() {
+  const { isTabbed, isWindowControlsOverlay, isStandalone } = useDisplayMode();
+
+  // ✅ در حالت tabbed، هدر ساده‌تر (تب‌ها خودشون بالا هستن)
+  if (isTabbed) {
+    return (
+      <header className="bg-white border-b px-4 py-2 flex items-center gap-4">
+        <Logo size="small" />
+        <SearchBar compact />
+        <UserAvatar />
+      </header>
+    );
+  }
+
+  // ✅ در حالت window-controls-overlay، فضا برای دکمه‌های ویندوز
+  if (isWindowControlsOverlay) {
+    return (
+      <header className="title-bar bg-gray-900 text-white px-4 py-2 flex items-center">
+        <Logo size="small" />
+        <nav className="flex-1 flex gap-4 ml-8">
+          <a href="/">خانه</a>
+          <a href="/products">محصولات</a>
+          <a href="/cart">سبد خرید</a>
+        </nav>
+        <UserAvatar />
+      </header>
+    );
+  }
+
+  // ✅ در حالت standalone یا مرورگر
+  return (
+    <header className="bg-blue-600 text-white px-4 py-3">
+      <div className="container mx-auto flex items-center justify-between">
+        <Logo />
+        <nav className="flex gap-6">
+          <a href="/">خانه</a>
+          <a href="/products">محصولات</a>
+          <a href="/cart">سبد خرید</a>
+        </nav>
+        <UserAvatar />
+      </div>
+    </header>
+  );
+}
+```
+
+### ۶. لینک‌ها و ناوبری در حالت Tabbed
+
+```jsx
+// components/SmartLink.jsx
+import { useDisplayMode } from '@/hooks/useDisplayMode';
+
+export function SmartLink({ href, children, ...props }) {
+  const { isTabbed } = useDisplayMode();
+
+  // ✅ در حالت tabbed، لینک‌های داخلی در تب جدید باز میشن
+  // ✅ لینک‌های خارجی همیشه در مرورگر باز میشن
+  const isExternal = href.startsWith('http') && !href.includes(window.location.hostname);
+
+  if (isExternal) {
+    return (
+      <a href={href} target="_blank" rel="noopener noreferrer" {...props}>
+        {children}
+      </a>
+    );
+  }
+
+  // ✅ لینک داخلی: در حالت tabbed، به صورت عادی (همون تب)
+  return (
+    <a href={href} {...props}>
+      {children}
+    </a>
+  );
+}
+```
+
+### ۷. ثبت Origin Trial (اگر لازمه)
+
+```html
+<!-- ✅ اگر Tabbed App Bar هنوز در origin trial هست -->
+<meta 
+  http-equiv="origin-trial" 
+  content="YOUR_ORIGIN_TRIAL_TOKEN" 
+/>
+```
+
+> برای دریافت token: [developer.chrome.com/origintrials](https://developer.chrome.com/origintrials/)
+
+**🔗 ابزار تست**
+
+- **Chrome 117+**: PWA رو نصب کن و ببین آیا تب‌ها ظاهر میشن.
+- **Chrome DevTools** → Rendering → Emulate CSS media feature `display-mode: tabbed`.
+- **Application** → Manifest → بررسی `tab_strip` و `display_override`.
+- **Console**: `window.matchMedia('(display-mode: tabbed)').matches`.
+- **Flags**: `chrome://flags/#desktop-pwas-tab-strip` رو فعال کن (اگه لازمه).
+- **تست واقعی**: روی Chrome دسکتاپ 117+ نصب کن و تست کن.
+
+**⚠️ چک‌لیست نهایی**
+
+- [ ] `tab_strip` در manifest تعریف شده؟
+- [ ] `new_tab_url` به صفحه‌ی مناسب اشاره می‌کنه؟
+- [ ] `display_override` شامل `tabbed` به عنوان اولین گزینه‌ست؟
+- [ ] Fallback به `standalone` و `browser` وجود داره؟
+- [ ] `scope` درست تنظیم شده؟
+- [ ] CSS برای `display-mode: tabbed` نوشته شده؟
+- [ ] هوک `useDisplayMode` پیاده‌سازی شده؟
+- [ ] هدر تطبیقی برای حالت tabbed داری؟
+- [ ] صفحه‌ی new-tab طراحی شده؟
+- [ ] در Chrome 117+ دسکتاپ واقعی تست شده؟
+- [ ] Fallback برای مرورگرهای بدون پشتیبانی کار می‌کنه؟
+
+> **قانون ۳ ثانیه‌ای:** PWA رو روی Chrome 117+ دسکتاپ نصب کن. آیا بالای اپ، نوار تب (مثل مرورگر) ظاهر میشه؟ یه لینک داخلی رو کلیک کن؛ آیا در تب جدید داخل اپ باز میشه؟ بعد DevTools → Rendering → `display-mode: tabbed` رو emulate کن؛ آیا CSS درست واکنش نشون میده؟ اگر نه، یعنی `tab_strip` در manifest درست تنظیم نشده!

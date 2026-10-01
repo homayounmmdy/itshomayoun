@@ -1,0 +1,458 @@
+---
+title: "PWA: App Shortcuts و میانبرهای روی آیکون"
+date: '2026-10-01'
+playlist: 'PWA - برنامه وب پیشرونده'
+tags: ['PWA', 'App-Shortcuts', 'Web-App-Manifest', 'Context-Menu', 'UX', 'Android', 'Desktop']
+description: "چطور با App Shortcuts میانبرهای سریع روی آیکون PWA بسازیم، چرا این قابلیت UX رو بهبود میده و چطور در اندروید و دسکتاپ کار می‌کنه."
+enableComment: true
+---
+
+# ⚡ PWA: App Shortcuts و میانبرهای روی آیکون
+
+**💡 مفهوم کلیدی**  
+App Shortcuts به PWA اجازه میده **میانبرهای سریع** روی آیکون اپ داشته باشه. وقتی کاربر روی آیکون **راست‌کلیک** می‌کنه (در دسکتاپ) یا **نگه می‌داره** (در اندروید)، یه منوی context menu با اکشن‌های پرکاربرد ظاهر میشه. این یعنی دسترسی سریع به ویژگی‌های مهم بدون باز کردن کامل اپ.
+
+**⚠️ دام رایج**  
+- فراموش کردن `shortcuts` در manifest (بدون اون فعال نمیشه!).
+- عدم ارائه‌ی آیکون برای هر shortcut (بدون آیکون، منو زشت دیده میشه).
+- استفاده از URL‌های طولانی و پیچیده (باید ساده و کوتاه باشن).
+- عدم تست در اندروید (فقط در Chrome Android کار می‌کنه).
+- نادیده گرفتن اینکه در iOS پشتیبانی نمیشه.
+- فراموش کردن `utm_source` در URL برای Analytics.
+- عدم ارائه‌ی fallback برای مرورگرهای بدون پشتیبانی.
+
+**📏 وضعیت پشتیبانی مرورگرها**
+
+| مرورگر       | پشتیبانی | محدودیت                                  |
+|--------------|-----------|-------------------------------------------|
+| Chrome       | ✅        | نسخه 88+ + اندروید + دسکتاپ              |
+| Edge         | ✅        | نسخه 88+                                 |
+| Opera        | ✅        | نسخه 74+                                 |
+| Safari       | ❌        | **پشتیبانی نمیشه**                        |
+| iOS Safari   | ❌        | پشتیبانی نمیشه                            |
+| Firefox      | ❌        | **پشتیبانی نمیشه**                        |
+
+> ⚠️ **نکته حیاتی**: این قابلیت در **iOS پشتیبانی نمیشه**. همیشه fallback بذار!
+
+**🛠️ راه‌حل سریع در کد**
+
+### ۱. تنظیمات manifest.json
+
+```json
+// public/manifest.json
+{
+  "name": "فروشگاه من",
+  "short_name": "فروشگاه",
+  "start_url": "/?utm_source=pwa",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#2563eb",
+  
+  // ✅ App Shortcuts
+  "shortcuts": [
+    {
+      "name": "سبد خرید",
+      "short_name": "سبد",
+      "description": "مشاهده سبد خرید",
+      "url": "/cart?utm_source=pwa_shortcut&utm_medium=shortcut",
+      "icons": [
+        {
+          "src": "/icons/shortcut-cart-96.png",
+          "sizes": "96x96",
+          "type": "image/png"
+        }
+      ]
+    },
+    {
+      "name": "جستجو",
+      "short_name": "جستجو",
+      "description": "جستجو در محصولات",
+      "url": "/search?utm_source=pwa_shortcut&utm_medium=shortcut",
+      "icons": [
+        {
+          "src": "/icons/shortcut-search-96.png",
+          "sizes": "96x96",
+          "type": "image/png"
+        }
+      ]
+    },
+    {
+      "name": "علاقه‌مندی‌ها",
+      "short_name": "علاقه‌مندی",
+      "description": "لیست علاقه‌مندی‌ها",
+      "url": "/wishlist?utm_source=pwa_shortcut&utm_medium=shortcut",
+      "icons": [
+        {
+          "src": "/icons/shortcut-wishlist-96.png",
+          "sizes": "96x96",
+          "type": "image/png"
+        }
+      ]
+    },
+    {
+      "name": "سفارش‌های من",
+      "short_name": "سفارش‌ها",
+      "description": "مشاهده سفارش‌های قبلی",
+      "url": "/orders?utm_source=pwa_shortcut&utm_medium=shortcut",
+      "icons": [
+        {
+          "src": "/icons/shortcut-orders-96.png",
+          "sizes": "96x96",
+          "type": "image/png"
+        }
+      ]
+    }
+  ],
+  
+  "icons": [
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}
+```
+
+### ۲. ساخت آیکون‌های Shortcut با Sharp
+
+```js
+// scripts/generate-shortcut-icons.js
+const sharp = require('sharp');
+const fs = require('fs');
+const path = require('path');
+
+const shortcuts = [
+  { name: 'cart', emoji: '🛒', color: { r: 37, g: 99, b: 235 } },
+  { name: 'search', emoji: '🔍', color: { r: 16, g: 185, b: 129 } },
+  { name: 'wishlist', emoji: '❤️', color: { r: 239, g: 68, b: 68 } },
+  { name: 'orders', emoji: '📦', color: { r: 139, g: 92, b: 246 } },
+];
+
+async function generateShortcutIcons() {
+  const outputDir = 'public/icons';
+  
+  if (!fs.existsSync(outputDir)) {
+    fs.mkdirSync(outputDir, { recursive: true });
+  }
+
+  for (const shortcut of shortcuts) {
+    // ✅ ساخت پس‌زمینه رنگی
+    const background = await sharp({
+      create: {
+        width: 96,
+        height: 96,
+        channels: 4,
+        background: { ...shortcut.color, alpha: 1 },
+      }
+    }).png().toBuffer();
+
+    // ✅ اضافه کردن emoji (اگه emoji به صورت image باشه)
+    // در عمل باید از SVG یا PNG استفاده کنی
+    await sharp(background)
+      .png()
+      .toFile(path.join(outputDir, `shortcut-${shortcut.name}-96.png`));
+
+    console.log(`✅ Generated: shortcut-${shortcut.name}-96.png`);
+  }
+}
+
+generateShortcutIcons();
+```
+
+### ۳. کامپوننت نمایش Shortcuts (برای دیباگ)
+
+```jsx
+// components/ShortcutsPreview.jsx
+import { useState, useEffect } from 'react';
+
+export function ShortcutsPreview() {
+  const [shortcuts, setShortcuts] = useState([]);
+
+  useEffect(() => {
+    // ✅ خواندن shortcuts از manifest
+    const fetchManifest = async () => {
+      try {
+        const response = await fetch('/manifest.json');
+        const manifest = await response.json();
+        setShortcuts(manifest.shortcuts || []);
+      } catch (error) {
+        console.error('Failed to load manifest:', error);
+      }
+    };
+
+    fetchManifest();
+  }, []);
+
+  if (shortcuts.length === 0) return null;
+
+  return (
+    <div className="p-6 bg-gray-50 rounded-lg">
+      <h3 className="font-bold text-lg mb-4">⚡ میانبرهای اپ</h3>
+      <p className="text-sm text-gray-600 mb-4">
+        روی آیکون اپ راست‌کلیک کنید (یا نگه دارید) تا این میانبرها رو ببینید:
+      </p>
+      
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        {shortcuts.map((shortcut, idx) => (
+          <a
+            key={idx}
+            href={shortcut.url}
+            className="flex flex-col items-center p-4 bg-white rounded-lg shadow-sm 
+                       hover:shadow-md transition-shadow border border-gray-100"
+          >
+            {shortcut.icons?.[0] && (
+              <img
+                src={shortcut.icons[0].src}
+                alt={shortcut.name}
+                className="w-12 h-12 mb-2"
+              />
+            )}
+            <span className="text-sm font-medium text-gray-900">
+              {shortcut.name}
+            </span>
+            {shortcut.description && (
+              <span className="text-xs text-gray-500 mt-1 text-center">
+                {shortcut.description}
+              </span>
+            )}
+          </a>
+        ))}
+      </div>
+    </div>
+  );
+}
+```
+
+### ۴. هوک تشخیص پشتیبانی
+
+```jsx
+// hooks/useAppShortcuts.js
+import { useState, useEffect } from 'react';
+
+export function useAppShortcuts() {
+  const [isSupported, setIsSupported] = useState(false);
+  const [shortcuts, setShortcuts] = useState([]);
+
+  useEffect(() => {
+    // ✅ بررسی پشتیبانی
+    const checkSupport = async () => {
+      if (!('launchQueue' in window)) {
+        setIsSupported(false);
+        return;
+      }
+
+      try {
+        const response = await fetch('/manifest.json');
+        const manifest = await response.json();
+        setShortcuts(manifest.shortcuts || []);
+        setIsSupported(true);
+      } catch (error) {
+        setIsSupported(false);
+      }
+    };
+
+    checkSupport();
+  }, []);
+
+  return { isSupported, shortcuts };
+}
+```
+
+### ۵. مدیریت Launch Params (وقتی از shortcut باز میشه)
+
+```jsx
+// hooks/useLaunchParams.js
+import { useEffect } from 'react';
+
+export function useLaunchParams() {
+  useEffect(() => {
+    // ✅ بررسی اینکه آیا اپ از shortcut باز شده
+    if ('launchQueue' in window) {
+      window.launchQueue.setConsumer((launchParams) => {
+        if (launchParams.targetURL) {
+          console.log('🚀 App launched from shortcut:', launchParams.targetURL);
+          
+          // ✅ ارسال به Analytics
+          if (typeof gtag !== 'undefined') {
+            gtag('event', 'shortcut_launch', {
+              target_url: launchParams.targetURL,
+            });
+          }
+
+          // ✅ ناوبری به URL
+          window.location.href = launchParams.targetURL;
+        }
+      });
+    }
+  }, []);
+}
+
+// ✅ استفاده در Layout
+function AppLayout({ children }) {
+  useLaunchParams();
+  
+  return (
+    <>
+      {children}
+    </>
+  );
+}
+```
+
+### ۶. صفحه‌ی راهنما برای کاربران
+
+```jsx
+// components/ShortcutsGuide.jsx
+import { useAppShortcuts } from '@/hooks/useAppShortcuts';
+
+export function ShortcutsGuide() {
+  const { isSupported, shortcuts } = useAppShortcuts();
+
+  if (!isSupported || shortcuts.length === 0) return null;
+
+  return (
+    <div className="p-6 bg-blue-50 border border-blue-200 rounded-lg space-y-4">
+      <h3 className="font-bold text-lg text-blue-900">
+        ⚡ میانبرهای سریع
+      </h3>
+      
+      <p className="text-sm text-blue-800">
+        برای دسترسی سریع به ویژگی‌های پرکاربرد، می‌تونی از میانبرهای اپ استفاده کنی:
+      </p>
+
+      <div className="space-y-3">
+        <div className="flex items-start gap-3">
+          <span className="text-2xl">📱</span>
+          <div>
+            <p className="font-medium text-sm">در اندروید:</p>
+            <p className="text-xs text-blue-700">
+              روی آیکون اپ نگه دار تا منوی میانبرها ظاهر بشه
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-start gap-3">
+          <span className="text-2xl">💻</span>
+          <div>
+            <p className="font-medium text-sm">در دسکتاپ:</p>
+            <p className="text-xs text-blue-700">
+              روی آیکون اپ راست‌کلیک کن تا منوی میانبرها ظاهر بشه
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-4 p-3 bg-white rounded-lg">
+        <p className="text-xs text-gray-600 mb-2">میانبرهای موجود:</p>
+        <div className="flex flex-wrap gap-2">
+          {shortcuts.map((shortcut, idx) => (
+            <span
+              key={idx}
+              className="px-3 py-1 bg-blue-100 text-blue-800 rounded-full text-xs font-medium"
+            >
+              {shortcut.name}
+            </span>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+```
+
+### ۷. Dynamic Shortcuts (با JavaScript)
+
+```jsx
+// hooks/useDynamicShortcuts.js
+import { useEffect } from 'react';
+
+export function useDynamicShortcuts(cartCount) {
+  useEffect(() => {
+    // ✅ آپدیت shortcut سبد خرید با تعداد آیتم‌ها
+    if ('setAppBadge' in navigator && cartCount > 0) {
+      navigator.setAppBadge(cartCount);
+    } else if ('clearAppBadge' in navigator) {
+      navigator.clearAppBadge();
+    }
+  }, [cartCount]);
+}
+
+// ✅ استفاده:
+function AppWithBadge() {
+  const [cartCount, setCartCount] = useState(3);
+  
+  useDynamicShortcuts(cartCount);
+  
+  return (
+    <div>
+      <p>سبد خرید: {cartCount} آیتم</p>
+      <button onClick={() => setCartCount((c) => c + 1)}>
+        افزودن به سبد
+      </button>
+    </div>
+  );
+}
+```
+
+### ۸. Fallback برای مرورگرهای بدون پشتیبانی
+
+```jsx
+// components/ShortcutsWithFallback.jsx
+import { useAppShortcuts } from '@/hooks/useAppShortcuts';
+
+export function ShortcutsWithFallback() {
+  const { isSupported, shortcuts } = useAppShortcuts();
+
+  if (!isSupported) {
+    return (
+      <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+        <p className="text-sm text-yellow-800">
+          ⚠️ App Shortcuts فقط در Chrome و Edge پشتیبانی میشه.
+        </p>
+        <p className="text-xs text-yellow-700 mt-1">
+          اما می‌تونی از لینک‌های سریع زیر استفاده کنی:
+        </p>
+        <div className="mt-3 flex flex-wrap gap-2">
+          {shortcuts.map((shortcut, idx) => (
+            <a
+              key={idx}
+              href={shortcut.url}
+              className="px-4 py-2 bg-white border border-yellow-300 rounded-lg text-sm hover:bg-yellow-100"
+            >
+              {shortcut.name}
+            </a>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  return <ShortcutsPreview />;
+}
+```
+
+**🔗 ابزار تست**
+
+- **Chrome Android**: PWA رو نصب کن، روی آیکون نگه دار.
+- **Chrome Desktop**: PWA رو نصب کن، روی آیکون راست‌کلیک کن.
+- **DevTools** → Application → Manifest → بررسی `shortcuts`.
+- **Console**: `window.launchQueue` برای بررسی پشتیبانی.
+- **Lighthouse** → PWA → "Registers a handler for the `launch` event".
+- **Safari/iOS**: تست کن که fallback درست کار می‌کنه.
+
+**⚠️ چک‌لیست نهایی**
+
+- [ ] `shortcuts` در manifest تعریف شده؟
+- [ ] هر shortcut آیکون ۹۶×۹۶ داره؟
+- [ ] `name` و `short_name` برای هر shortcut ست شده؟
+- [ ] `url` شامل `utm_source` برای Analytics هست؟
+- [ ] آیکون‌ها با پس‌زمینه رنگی و واضح هستن؟
+- [ ] `launchQueue` برای مدیریت launch params پیاده‌سازی شده؟
+- [ ] Fallback برای مرورگرهای بدون پشتیبانی داری؟
+- [ ] در Chrome Android واقعی تست کردی؟
+- [ ] در Chrome Desktop واقعی تست کردی؟
+- [ ] راهنما برای کاربران اضافه کردی؟
+
+> **قانون ۳ ثانیه‌ای:** PWA رو روی اندروید نصب کن، روی آیکون نگه دار. آیا منوی میانبرها ظاهر میشه؟ بعد همون کار رو روی دسکتاپ انجام بده (راست‌کلیک). اگه در یکی از این دو تا منو ظاهر نشد، یعنی `shortcuts` در manifest درست تنظیم نشده! بعد یه shortcut رو انتخاب کن؛ آیا به صفحه درست میره؟
