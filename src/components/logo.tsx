@@ -1,7 +1,7 @@
 import React from 'react';
 import {Link} from 'next-view-transitions';
 
-const Logo = ({hasLink = true, title = "Go to home"}) => {
+const Logo = ({hasLink = true, title = "برگشت به خانه"}) => {
     return (
         <>
             {hasLink &&
