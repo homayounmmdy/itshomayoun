@@ -1,0 +1,655 @@
+---
+title: "PWA: انتشار در Microsoft Store به عنوان اپ ویندوز"
+date: '2026-10-01'
+playlist: 'PWA - برنامه وب پیشرونده'
+tags: ['PWA', 'Microsoft-Store', 'Windows', 'PWABuilder', 'MSIX', 'AppX', 'Distribution']
+description: "چطور PWA رو به اپ ویندوز تبدیل کنیم، با PWABuilder بسته‌بندی کنیم، در Microsoft Partner Center ثبت کنیم و در Microsoft Store منتشر کنیم."
+enableComment: true
+---
+
+# 🪟 PWA: انتشار در Microsoft Store به عنوان اپ ویندوز
+
+**💡 مفهوم کلیدی**  
+Microsoft Store یکی از بهترین راه‌ها برای توزیع PWA به عنوان **اپ ویندوز** هست. با استفاده از **PWABuilder** می‌تونی PWA رو به بسته‌ی **MSIX** تبدیل کنی و در Store منتشر کنی. مزایا:
+- دسترسی به ۱ میلیارد کاربر ویندوز
+- آپدیت خودکار
+- یکپارچگی با Start Menu و Taskbar
+- قابلیت نصب آفلاین
+- بدون نیاز به Electron یا بسته‌بندی سنگین
+
+**⚠️ دام رایج**  
+- فراموش کردن `scope` و `start_url` درست در manifest (Store رد می‌کنه!).
+- عدم ارائه‌ی آیکون‌های با سایز مناسب (50×50 تا 1240×1240).
+- فراموش کردن HTTPS (الزامی!).
+- عدم تست MSIX قبل از سابمیت.
+- فراموش کردن `package.appxmanifest` سفارشی.
+- عدم تنظیم `background_color` و `theme_color`.
+- نادیده گرفتن سیاست‌های Store (مثل محتوای تکراری).
+- عدم استفاده از `PWABuilder` برای تولید خودکار.
+
+**📏 پیش‌نیازها**
+
+| مورد                          | توضیح                                              |
+|-------------------------------|----------------------------------------------------|
+| PWA با manifest معتبر         | name, short_name, icons, start_url, display       |
+| HTTPS                         | الزامی (به جز localhost برای تست)                 |
+| Service Worker                | برای کار آفلاین                                   |
+| آیکون‌های با سایزهای مختلف    | 50×50, 150×150, 44×44, 512×512                    |
+| حساب Microsoft Partner Center  | هزینه‌ی ثبت‌نام یک‌باره: ۱۹ دلار (فردی) / ۹۹ دلار (شرکت) |
+| PWABuilder                    | ابزار رسمی Microsoft برای بسته‌بندی                |
+
+---
+
+## 🛠️ بخش اول: آماده‌سازی PWA
+
+### ۱. manifest.json کامل برای Store
+
+```json
+// public/manifest.json
+{
+  "name": "فروشگاه آنلاین من",
+  "short_name": "فروشگاه",
+  "description": "بهترین فروشگاه آنلاین با ارسال سریع",
+  "start_url": "/?utm_source=pwa&utm_medium=store",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#ffffff",
+  "theme_color": "#2563eb",
+  "lang": "fa-IR",
+  "dir": "rtl",
+  "categories": ["shopping", "lifestyle"],
+  
+  "icons": [
+    {
+      "src": "/icons/icon-44.png",
+      "sizes": "44x44",
+      "type": "image/png"
+    },
+    {
+      "src": "/icons/icon-50.png",
+      "sizes": "50x50",
+      "type": "image/png"
+    },
+    {
+      "src": "/icons/icon-150.png",
+      "sizes": "150x150",
+      "type": "image/png"
+    },
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  
+  "screenshots": [
+    {
+      "src": "/screenshots/desktop-1.png",
+      "sizes": "1920x1080",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "صفحه اصلی در دسکتاپ"
+    },
+    {
+      "src": "/screenshots/mobile-1.png",
+      "sizes": "1080x1920",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "صفحه اصلی در موبایل"
+    }
+  ]
+}
+```
+
+### ۲. بررسی آمادگی PWA
+
+```jsx
+// components/StoreReadinessCheck.jsx
+import { useState, useEffect } from 'react';
+
+export function StoreReadinessCheck() {
+  const [checks, setChecks] = useState([]);
+
+  useEffect(() => {
+    const runChecks = async () => {
+      const results = [];
+
+      // ✅ بررسی HTTPS
+      results.push({
+        name: 'HTTPS',
+        passed: window.location.protocol === 'https:',
+        message: window.location.protocol === 'https:' 
+          ? '✅ سایت روی HTTPS هست' 
+          : '❌ سایت باید روی HTTPS باشه',
+      });
+
+      // ✅ بررسی manifest
+      try {
+        const response = await fetch('/manifest.json');
+        const manifest = await response.json();
+        
+        results.push({
+          name: 'Manifest',
+          passed: !!manifest.name && !!manifest.start_url && manifest.icons?.length > 0,
+          message: '✅ Manifest معتبر هست',
+        });
+
+        // ✅ بررسی آیکون‌ها
+        const requiredSizes = ['44x44', '50x50', '150x150', '192x192', '512x512'];
+        const iconSizes = manifest.icons?.map((i) => i.sizes) || [];
+        const hasAllSizes = requiredSizes.every((size) => 
+          iconSizes.some((s) => s.includes(size.split('x')[0]))
+        );
+
+        results.push({
+          name: 'Icons',
+          passed: hasAllSizes,
+          message: hasAllSizes 
+            ? '✅ همه‌ی سایزهای آیکون موجودن' 
+            : '❌ بعضی سایزهای آیکون موجود نیستن',
+        });
+      } catch (error) {
+        results.push({
+          name: 'Manifest',
+          passed: false,
+          message: '❌ Manifest پیدا نشد',
+        });
+      }
+
+      // ✅ بررسی Service Worker
+      if ('serviceWorker' in navigator) {
+        const registration = await navigator.serviceWorker.getRegistration();
+        results.push({
+          name: 'Service Worker',
+          passed: !!registration,
+          message: registration 
+            ? '✅ Service Worker ثبت شده' 
+            : '❌ Service Worker ثبت نشده',
+        });
+      }
+
+      // ✅ بررسی display mode
+      const isStandalone = window.matchMedia('(display-mode: standalone)').matches;
+      results.push({
+        name: 'Display Mode',
+        passed: true,
+        message: '✅ Display mode: standalone',
+      });
+
+      setChecks(results);
+    };
+
+    runChecks();
+  }, []);
+
+  const allPassed = checks.every((c) => c.passed);
+
+  return (
+    <div className="max-w-md mx-auto p-6 bg-white rounded-xl shadow-lg space-y-4">
+      <h2 className="text-xl font-bold">
+        {allPassed ? '✅ آماده‌ی انتشار' : '⚠️ نیاز به اصلاح'}
+      </h2>
+
+      <ul className="space-y-2">
+        {checks.map((check, idx) => (
+          <li
+            key={idx}
+            className={`p-3 rounded-lg border ${
+              check.passed 
+                ? 'bg-green-50 border-green-200' 
+                : 'bg-red-50 border-red-200'
+            }`}
+          >
+            <p className="font-medium text-sm">{check.name}</p>
+            <p className="text-xs text-gray-600 mt-1">{check.message}</p>
+          </li>
+        ))}
+      </ul>
+
+      {allPassed && (
+        <a
+          href="https://www.pwabuilder.com/"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="block w-full bg-blue-600 text-white text-center px-6 py-3 rounded-lg hover:bg-blue-700 font-medium"
+        >
+          🚀 ادامه در PWABuilder
+        </a>
+      )}
+    </div>
+  );
+}
+```
+
+---
+
+## 📦 بخش دوم: بسته‌بندی با PWABuilder
+
+### ۳. مراحل استفاده از PWABuilder
+
+```markdown
+## مراحل بسته‌بندی:
+
+### ۱. ورود به PWABuilder
+- برو به [pwabuilder.com](https://www.pwabuilder.com/)
+- URL سایتت رو وارد کن
+- PWABuilder manifest رو تحلیل می‌کنه
+
+### ۲. بررسی امتیاز PWA
+- PWABuilder امتیاز PWA رو نشون میده
+- اگه کمتر از ۱۰۰ هست، مشکلات رو رفع کن
+
+### ۳. انتخاب پلتفرم Windows
+- روی "Package for Stores" کلیک کن
+- پلتفرم "Windows" رو انتخاب کن
+
+### ۴. تنظیمات بسته
+- **Package Name**: نام یکتا (مثل `com.example.myapp`)
+- **Publisher**: CN=YourName (از Partner Center می‌گیری)
+- **Version**: 1.0.0.0
+- **Icons**: آیکون‌های با سایزهای مختلف آپلود کن
+
+### ۵. دانلود بسته
+- PWABuilder یه فایل ZIP می‌ده
+- شامل: `.msixbundle` و `StoreAssets`
+```
+
+### ۴. ساختار فایل‌های خروجی
+
+```
+📦 myapp-windows-package.zip
+├── 📄 myapp.msixbundle          # بسته‌ی اصلی برای Store
+├── 📄 myapp_x64.msix            # نسخه ۶۴ بیتی
+├── 📄 myapp_arm64.msix          # نسخه ARM64
+├── 📄 AppxManifest.xml          # Manifest ویندوز
+├── 📁 StoreAssets/
+│   ├── 📄 StoreLogo.png         # 50×50
+│   ├── 📄 Square44x44Logo.png   # 44×44
+│   ├── 📄 Square150x150Logo.png # 150×150
+│   ├── 📄 Wide310x150Logo.png   # 310×150
+│   └── 📄 SplashScreen.png      # 620×300
+└── 📄 README.md                 # راهنما
+```
+
+### ۵. AppxManifest.xml سفارشی (اختیاری)
+
+```xml
+<!-- ✅ اگه می‌خوای تنظیمات پیشرفته اضافه کنی -->
+<?xml version="1.0" encoding="utf-8"?>
+<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+         xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+         xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3">
+
+  <Identity Name="com.example.myapp"
+            Publisher="CN=YourName"
+            Version="1.0.0.0" />
+
+  <Properties>
+    <DisplayName>فروشگاه من</DisplayName>
+    <PublisherDisplayName>Your Company</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+  </Properties>
+
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" 
+                       MinVersion="10.0.17763.0" 
+                       MaxVersionTested="10.0.22621.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="fa-IR" />
+    <Resource Language="en-US" />
+  </Resources>
+
+  <Applications>
+    <Application Id="App"
+                 Executable="$targetnametoken$.exe"
+                 EntryPoint="$targetentrypoint$">
+      <uap:VisualElements
+        DisplayName="فروشگاه من"
+        Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png"
+        Description="بهترین فروشگاه آنلاین"
+        BackgroundColor="#2563eb">
+        <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.png" />
+        <uap:SplashScreen Image="Assets\SplashScreen.png" />
+      </uap:VisualElements>
+    </Application>
+  </Applications>
+</Package>
+```
+
+---
+
+## 🏪 بخش سوم: ثبت در Microsoft Partner Center
+
+### ۶. مراحل ثبت در Partner Center
+
+```markdown
+## مراحل انتشار در Store:
+
+### ۱. ثبت‌نام در Partner Center
+- برو به [partner.microsoft.com/dashboard](https://partner.microsoft.com/dashboard)
+- حساب Developer ثبت کن (۱۹ دلار فردی / ۹۹ دلار شرکتی)
+
+### ۲. ساخت اپ جدید
+- روی "Create new app" کلیک کن
+- نام اپ رو وارد کن (مثل "فروشگاه من")
+
+### ۳. پر کردن اطلاعات
+- **Description**: توضیحات کامل (حداقل ۱۰۰ کاراکتر)
+- **Keywords**: کلمات کلیدی (حداکثر ۷ تا)
+- **Category**: Shopping یا Lifestyle
+- **Age Rating**: مناسب برای همه
+- **Privacy Policy**: لینک به سیاست حریم خصوصی
+
+### ۴. آپلود تصاویر Store
+- **Store Logo**: 300×300 PNG
+- **Screenshots**: حداقل ۳ تا (1920×1080 یا 1080×1920)
+- **Trailer**: ویدیوی معرفی (اختیاری ولی توصیه‌شده)
+
+### ۵. آپلود بسته
+- فایل `.msixbundle` رو آپلود کن
+- PWABuilder خودش همه‌ی تنظیمات رو درست می‌کنه
+
+### ۶. سابمیت برای بررسی
+- روی "Submit to Store" کلیک کن
+- بررسی معمولاً ۱-۳ روز طول می‌کشه
+
+### ۷. انتشار
+- بعد از تأیید، اپ در Store منتشر میشه
+- کاربران می‌تونن نصب کنن
+```
+
+### ۷. کامپوننت راهنمای انتشار
+
+```jsx
+// components/PublishingGuide.jsx
+export function PublishingGuide() {
+  const steps = [
+    {
+      title: '۱. آماده‌سازی PWA',
+      items: [
+        'manifest.json معتبر بساز',
+        'آیکون‌های 44, 50, 150, 192, 512 اضافه کن',
+        'Service Worker ثبت کن',
+        'HTTPS فعال کن',
+      ],
+    },
+    {
+      title: '۲. بسته‌بندی با PWABuilder',
+      items: [
+        'برو به pwabuilder.com',
+        'URL سایتت رو وارد کن',
+        'Package for Windows رو انتخاب کن',
+        'تنظیمات Publisher رو پر کن',
+        'فایل ZIP رو دانلود کن',
+      ],
+    },
+    {
+      title: '۳. ثبت در Partner Center',
+      items: [
+        'حساب Developer بساز (۱۹ دلار)',
+        'Create new app رو بزن',
+        'اطلاعات اپ رو پر کن',
+        'Screenshots آپلود کن',
+      ],
+    },
+    {
+      title: '۴. سابمیت و انتشار',
+      items: [
+        'فایل .msixbundle رو آپلود کن',
+        'Submit to Store رو بزن',
+        '۱-۳ روز صبر کن',
+        'بعد از تأیید، اپ منتشر میشه',
+      ],
+    },
+  ];
+
+  return (
+    <div className="max-w-2xl mx-auto p-6 bg-white rounded-xl shadow-lg space-y-6">
+      <h2 className="text-2xl font-bold">📋 راهنمای انتشار در Microsoft Store</h2>
+
+      <div className="space-y-4">
+        {steps.map((step, idx) => (
+          <div key={idx} className="border border-gray-200 rounded-lg p-4">
+            <h3 className="font-bold text-lg mb-2">{step.title}</h3>
+            <ul className="space-y-1">
+              {step.items.map((item, i) => (
+                <li key={i} className="flex items-start gap-2 text-sm">
+                  <span className="text-blue-600 mt-0.5">•</span>
+                  <span>{item}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </div>
+
+      <div className="flex gap-2">
+        <a
+          href="https://www.pwabuilder.com/"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex-1 bg-blue-600 text-white text-center px-4 py-3 rounded-lg hover:bg-blue-700 font-medium"
+        >
+          🔧 PWABuilder
+        </a>
+        <a
+          href="https://partner.microsoft.com/dashboard"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex-1 bg-purple-600 text-white text-center px-4 py-3 rounded-lg hover:bg-purple-700 font-medium"
+        >
+          🏪 Partner Center
+        </a>
+      </div>
+    </div>
+  );
+}
+```
+
+---
+
+## 🧪 بخش چهارم: تست محلی
+
+### ۸. نصب و تست MSIX محلی
+
+```powershell
+# ✅ فعال‌سازی Developer Mode در ویندوز
+# Settings → Update & Security → For developers → Developer Mode
+
+# ✅ نصب گواهی توسعه‌دهنده (برای تست محلی)
+# روی فایل .cer کلیک کن و Install کن
+
+# ✅ نصب MSIX با PowerShell
+Add-AppxPackage -Path "C:\path\to\myapp.msixbundle"
+
+# ✅ بررسی نصب
+Get-AppxPackage -Name "*myapp*"
+
+# ✅ حذف اپ
+Remove-AppxPackage -Package (Get-AppxPackage -Name "*myapp*").PackageFullName
+
+# ✅ مشاهده لاگ‌ها
+Get-AppxLog -ActivityId (Get-AppxPackage -Name "*myapp*").PackageFullName
+```
+
+### ۹. کامپوننت تست محلی
+
+```jsx
+// components/LocalTestGuide.jsx
+export function LocalTestGuide() {
+  return (
+    <div className="p-6 bg-gray-50 rounded-lg space-y-4">
+      <h3 className="font-bold text-lg">🧪 تست محلی قبل از سابمیت</h3>
+
+      <div className="space-y-3">
+        <div className="p-3 bg-white rounded border">
+          <p className="font-medium text-sm mb-1">۱. فعال‌سازی Developer Mode</p>
+          <code className="text-xs text-gray-600">
+            Settings → Update & Security → For developers → Developer Mode
+          </code>
+        </div>
+
+        <div className="p-3 bg-white rounded border">
+          <p className="font-medium text-sm mb-1">۲. نصب گواهی</p>
+          <code className="text-xs text-gray-600">
+            روی فایل .cer کلیک کن → Install Certificate → Local Machine
+          </code>
+        </div>
+
+        <div className="p-3 bg-white rounded border">
+          <p className="font-medium text-sm mb-1">۳. نصب MSIX</p>
+          <code className="text-xs text-gray-600 block">
+            Add-AppxPackage -Path "myapp.msixbundle"
+          </code>
+        </div>
+
+        <div className="p-3 bg-white rounded border">
+          <p className="font-medium text-sm mb-1">۴. تست اپ</p>
+          <ul className="text-xs text-gray-600 space-y-1">
+            <li>✅ از Start Menu باز کن</li>
+            <li>✅ کار آفلاین رو تست کن</li>
+            <li>✅ آپدیت رو تست کن</li>
+            <li>✅ Uninstall رو تست کن</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  );
+}
+```
+
+---
+
+## 🔄 بخش پنجم: آپدیت اپ
+
+### ۱۰. آپدیت خودکار
+
+```markdown
+## آپدیت اپ در Store:
+
+### ۱. افزایش Version
+- در PWABuilder، Version رو افزایش بده
+- مثال: 1.0.0.0 → 1.0.1.0
+
+### ۲. بسته‌بندی مجدد
+- دوباره Package for Windows رو بزن
+- فایل جدید .msixbundle رو دانلود کن
+
+### ۳. سابمیت آپدیت
+- در Partner Center، اپ رو باز کن
+- به بخش "Packages" برو
+- "Create new release" رو بزن
+- فایل جدید رو آپلود کن
+
+### ۴. انتشار
+- بعد از تأیید، آپدیت برای همه‌ی کاربران منتشر میشه
+- ویندوز به صورت خودکار آپدیت رو نصب می‌کنه
+```
+
+### ۱۱. هوک تشخیص آپدیت
+
+```jsx
+// hooks/useStoreUpdate.js
+import { useState, useEffect } from 'react';
+
+export function useStoreUpdate() {
+  const [currentVersion, setCurrentVersion] = useState(null);
+  const [updateAvailable, setUpdateAvailable] = useState(false);
+
+  useEffect(() => {
+    // ✅ دریافت نسخه فعلی از Service Worker
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.ready.then((registration) => {
+        if (registration.active) {
+          registration.active.postMessage({ type: 'GET_VERSION' });
+        }
+      });
+
+      navigator.serviceWorker.addEventListener('message', (event) => {
+        if (event.data?.type === 'VERSION') {
+          setCurrentVersion(event.data.version);
+        }
+      });
+    }
+
+    // ✅ بررسی آپدیت (هر ۲۴ ساعت)
+    const checkUpdate = async () => {
+      try {
+        const response = await fetch('/api/version');
+        const data = await response.json();
+        
+        if (currentVersion && data.version !== currentVersion) {
+          setUpdateAvailable(true);
+        }
+      } catch (error) {
+        console.error('Update check failed:', error);
+      }
+    };
+
+    const interval = setInterval(checkUpdate, 24 * 60 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [currentVersion]);
+
+  return { currentVersion, updateAvailable };
+}
+```
+
+---
+
+**🔗 ابزار تست و انتشار**
+
+- **[PWABuilder](https://www.pwabuilder.com/)**: ابزار رسمی Microsoft برای بسته‌بندی
+- **[Partner Center](https://partner.microsoft.com/dashboard)**: داشبورد مدیریت Store
+- **[Windows App Certification Kit](https://learn.microsoft.com/en-us/windows/apps/desktop/modernize/desktop-to-uwp-extensions)**: تست کیفیت اپ
+- **PowerShell**: `Add-AppxPackage` برای نصب محلی
+- **DevTools** → Application → Service Workers: بررسی SW
+- **Lighthouse**: بررسی کیفیت PWA
+
+**⚠️ چک‌لیست نهایی**
+
+**آماده‌سازی PWA:**
+- [ ] manifest.json معتبر با همه‌ی فیلدهای ضروری؟
+- [ ] آیکون‌های 44, 50, 150, 192, 512 موجودن؟
+- [ ] Service Worker ثبت شده و کار می‌کنه؟
+- [ ] سایت روی HTTPS هست؟
+- [ ] `start_url` و `scope` درست تنظیم شدن؟
+- [ ] Screenshots با کیفیت آماده‌ست؟
+
+**بسته‌بندی:**
+- [ ] با PWABuilder بسته‌بندی کردی؟
+- [ ] Publisher ID درست تنظیم شده؟
+- [ ] Version number افزایش پیدا کرده؟
+- [ ] فایل .msixbundle سالمه؟
+
+**Partner Center:**
+- [ ] حساب Developer ثبت شده؟
+- [ ] اطلاعات اپ کامله؟
+- [ ] Privacy Policy لینک داده شده؟
+- [ ] Age Rating درست تنظیم شده؟
+- [ ] Screenshots آپلود شدن؟
+
+**تست:**
+- [ ] Developer Mode فعال شده؟
+- [ ] گواهی نصب شده؟
+- [ ] MSIX محلی نصب و تست شده؟
+- [ ] کار آفلاین تست شده؟
+- [ ] آپدیت تست شده؟
+
+> **قانون ۳ ثانیه‌ای:** برو به [pwabuilder.com](https://www.pwabuilder.com/)، URL سایتت رو وارد کن. آیا امتیاز PWA بالای ۱۰۰ هست؟ بعد Package for Windows رو بزن؛ آیا فایل .msixbundle تولید میشه؟ بعد Partner Center رو باز کن؛ آیا می‌تونی اپ جدید بسازی؟ اگه در هر کدوم از این مراحل مشکل داشتی، یعنی PWA آماده‌ی انتشار نیست!

@@ -1,0 +1,801 @@
+---
+title: "PWA: انتشار در Google Play با TWA (Trusted Web Activity)"
+date: '2026-10-01'
+playlist: 'PWA - برنامه وب پیشرونده'
+tags: ['PWA', 'Google-Play', 'TWA', 'Trusted-Web-Activity', 'Android', 'Bubblewrap', 'PWABuilder', 'Digital-Asset-Links']
+description: "چطور PWA رو به اپ اندروید تبدیل کنیم، با Bubblewrap یا PWABuilder بسته‌بندی کنیم، Digital Asset Links رو تنظیم کنیم و در Google Play منتشر کنیم."
+enableComment: true
+---
+
+# 🤖 PWA: انتشار در Google Play با TWA (Trusted Web Activity)
+
+**💡 مفهوم کلیدی**  
+**Trusted Web Activity (TWA)** یه قابلیت اندروید هست که به PWA اجازه میده **بدون address bar مرورگر** و به صورت **تمام‌صفحه** اجرا بشه - دقیقاً مثل یه اپ بومی! با TWA می‌تونی PWA رو به APK/AAB تبدیل کنی و در **Google Play** منتشر کنی.
+
+**مزایای TWA:**
+- دسترسی به ۳ میلیارد کاربر اندروید
+- بدون نیاز به نوشتن کد Kotlin/Java
+- آپدیت خودکار از طریق Google Play
+- یکپارچگی با Notification، Badge، Shortcut
+- اندازه‌ی بسیار کوچک (حدود ۵۰۰ KB)
+- استفاده از Chrome engine (همیشه up-to-date)
+
+**⚠️ دام رایج**  
+- فراموش کردن `assetlinks.json` (بدون اون TWA کار نمی‌کنه و address bar نشون داده میشه!).
+- عدم تطابق SHA-256 fingerprint با signing key.
+- فراموش کردن `name` و `start_url` در manifest.
+- عدم تست با `bubblewrap validate`.
+- فراموش کردن `notifications` delegation.
+- عدم تنظیم `display: standalone` در manifest.
+- نادیده گرفتن `orientation` برای بازی‌ها.
+- عدم استفاده از `PWABuilder` برای تولید خودکار.
+
+**📏 پیش‌نیازها**
+
+| مورد                          | توضیح                                              |
+|-------------------------------|----------------------------------------------------|
+| PWA با manifest معتبر         | name, short_name, icons, start_url, display: standalone |
+| HTTPS                         | الزامی (به جز localhost برای تست)                 |
+| Service Worker                | برای کار آفلاین                                   |
+| Digital Asset Links           | فایل `assetlinks.json` روی سرور                   |
+| Google Play Developer Account | هزینه‌ی یک‌باره: ۲۵ دلار                         |
+| Bubblewrap یا PWABuilder      | ابزار بسته‌بندی                                   |
+| JDK 11+                       | برای Bubblewrap                                   |
+| Android Studio                | برای تست محلی (اختیاری)                           |
+
+---
+
+## 🔗 بخش اول: Digital Asset Links (حیاتی!)
+
+### ۱. فایل assetlinks.json
+
+این فایل **حیاتی‌ترین** بخش TWA هست. به گوگل می‌گه که "این وب‌سایت با این اپ اندروید مرتبطه".
+
+```json
+// /.well-known/assetlinks.json
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.example.myapp",
+      "sha256_cert_fingerprints": [
+        "14:6D:E9:83:C5:73:06:50:D8:EE:B9:95:2F:34:FC:64:16:A0:83:42:E6:1D:BE:A3:38:4C:F4:07:50:C2:7A:CC"
+      ]
+    }
+  }
+]
+```
+
+### ۲. دریافت SHA-256 Fingerprint
+
+```bash
+# ✅ روش ۱: از keystore فعلی
+keytool -list -v -keystore my-release-key.keystore | grep SHA256
+
+# ✅ روش ۲: از Google Play (بعد از آپلود)
+# Google Play Console → App signing → App signing key → SHA-256
+
+# ✅ روش ۳: با Bubblewrap
+bubblewrap fingerprint
+```
+
+### ۳. بررسی صحت assetlinks.json
+
+```bash
+# ✅ بررسی آنلاین
+curl https://example.com/.well-known/assetlinks.json
+
+# ✅ باید Content-Type: application/json باشه
+# ✅ باید HTTPS باشه
+# ✅ نباید redirect داشته باشه
+```
+
+### ۴. Google Digital Asset Links API
+
+```bash
+# ✅ بررسی اینکه گوگل assetlinks رو درست می‌خونه
+curl "https://digitalassetlinks.googleapis.com/v1/statements:list?source.web.site=https://example.com"
+```
+
+### ۵. کامپوننت بررسی Digital Asset Links
+
+```jsx
+// components/DigitalAssetLinksCheck.jsx
+import { useState, useEffect } from 'react';
+
+export function DigitalAssetLinksCheck() {
+  const [status, setStatus] = useState('checking');
+  const [details, setDetails] = useState(null);
+
+  useEffect(() => {
+    const check = async () => {
+      try {
+        // ✅ بررسی فایل assetlinks.json
+        const response = await fetch('/.well-known/assetlinks.json');
+        
+        if (!response.ok) {
+          setStatus('error');
+          setDetails({ message: 'فایل assetlinks.json پیدا نشد' });
+          return;
+        }
+
+        const contentType = response.headers.get('content-type');
+        if (!contentType?.includes('application/json')) {
+          setStatus('error');
+          setDetails({ message: 'Content-Type باید application/json باشه' });
+          return;
+        }
+
+        const data = await response.json();
+        
+        if (!Array.isArray(data) || data.length === 0) {
+          setStatus('error');
+          setDetails({ message: 'فایل خالی یا نامعتبره' });
+          return;
+        }
+
+        const firstEntry = data[0];
+        
+        if (!firstEntry.target?.sha256_cert_fingerprints?.length) {
+          setStatus('error');
+          setDetails({ message: 'SHA-256 fingerprint مشخص نشده' });
+          return;
+        }
+
+        setStatus('success');
+        setDetails({
+          packageName: firstEntry.target.package_name,
+          fingerprint: firstEntry.target.sha256_cert_fingerprints[0],
+        });
+      } catch (error) {
+        setStatus('error');
+        setDetails({ message: error.message });
+      }
+    };
+
+    check();
+  }, []);
+
+  return (
+    <div className={`p-6 rounded-lg border ${
+      status === 'success' ? 'bg-green-50 border-green-200' :
+      status === 'error' ? 'bg-red-50 border-red-200' :
+      'bg-yellow-50 border-yellow-200'
+    }`}>
+      <h3 className="font-bold text-lg mb-2">
+        {status === 'success' ? '✅ Digital Asset Links درست تنظیم شده' :
+         status === 'error' ? '❌ خطا در Digital Asset Links' :
+         '⏳ در حال بررسی...'}
+      </h3>
+
+      {details && (
+        <div className="space-y-2 text-sm">
+          {details.packageName && (
+            <p><strong>Package Name:</strong> {details.packageName}</p>
+          )}
+          {details.fingerprint && (
+            <p className="font-mono text-xs break-all">
+              <strong>SHA-256:</strong> {details.fingerprint}
+            </p>
+          )}
+          {details.message && (
+            <p className="text-red-700">{details.message}</p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+---
+
+## 🛠️ بخش دوم: بسته‌بندی با Bubblewrap
+
+### ۶. نصب Bubblewrap
+
+```bash
+# ✅ نصب Bubblewrap
+npm install -g @bubblewrap/cli
+
+# ✅ بررسی نصب
+bubblewrap --version
+
+# ✅ تنظیم JDK و Android SDK
+bubblewrap doctor
+```
+
+### ۷. ساخت پروژه TWA
+
+```bash
+# ✅ ساخت پروژه جدید
+bubblewrap init --manifest=https://example.com/manifest.json
+
+# ✅ سوالات:
+# Domain: example.com
+# Name: فروشگاه من
+# Short Name: فروشگاه
+# Color: #2563eb
+# ...
+```
+
+### ۸. ساختار پروژه Bubblewrap
+
+```
+📦 myapp/
+├── 📁 app/
+│   ├── 📁 src/main/
+│   │   ├── 📁 java/com/example/myapp/
+│   │   │   └── 📄 Application.java
+│   │   ├── 📁 res/
+│   │   │   ├── 📁 drawable/
+│   │   │   ├── 📁 values/
+│   │   │   └── 📁 xml/
+│   │   │       └── 📄 shortcuts.xml
+│   │   └── 📄 AndroidManifest.xml
+│   └── 📄 build.gradle
+├── 📄 twa-manifest.json          # تنظیمات TWA
+├── 📄 package.json
+└── 📄 README.md
+```
+
+### ۹. تنظیمات twa-manifest.json
+
+```json
+// twa-manifest.json
+{
+  "packageId": "com.example.myapp",
+  "host": "example.com",
+  "name": "فروشگاه من",
+  "launcherName": "فروشگاه",
+  "display": "standalone",
+  "themeColor": "#2563eb",
+  "navigationColor": "#000000",
+  "navigationColorDark": "#000000",
+  "navigationDividerColor": "#000000",
+  "navigationDividerColorDark": "#000000",
+  "backgroundColor": "#ffffff",
+  "enableNotifications": true,
+  "startUrl": "/?utm_source=twa",
+  "iconUrl": "https://example.com/icons/icon-512.png",
+  "splashScreenFadeOutDuration": 300,
+  "signingKey": {
+    "path": "./android.keystore",
+    "alias": "myapp"
+  },
+  "appVersionCode": 1,
+  "appVersionName": "1.0.0",
+  "shortcuts": [
+    {
+      "name": "سبد خرید",
+      "url": "/cart?utm_source=twa_shortcut",
+      "chosenIconUrl": "https://example.com/icons/shortcut-cart.png"
+    },
+    {
+      "name": "جستجو",
+      "url": "/search?utm_source=twa_shortcut",
+      "chosenIconUrl": "https://example.com/icons/shortcut-search.png"
+    }
+  ],
+  "generatorApp": "bubblewrap-cli",
+  "webManifestUrl": "https://example.com/manifest.json",
+  "fallbackType": "customtabs",
+  "features": {},
+  "alphaDependencies": { "enabled": false },
+  "enableSiteSettingsShortcut": true,
+  "isChromeOSOnly": false,
+  "orientation": "portrait",
+  "fingerprints": [
+    {
+      "value": "14:6D:E9:83:C5:73:06:50:D8:EE:B9:95:2F:34:FC:64:16:A0:83:42:E6:1D:BE:A3:38:4C:F4:07:50:C2:7A:CC"
+    }
+  ]
+}
+```
+
+### ۱۰. Build و Sign
+
+```bash
+# ✅ ساخت APK (برای تست)
+bubblewrap build
+
+# ✅ خروجی:
+# app/build/outputs/apk/debug/app-debug.apk
+# app/build/outputs/bundle/release/app-release.aab
+
+# ✅ بررسی APK
+bubblewrap validate
+```
+
+### ۱۱. نصب و تست محلی
+
+```bash
+# ✅ نصب روی دستگاه اندروید
+adb install app/build/outputs/apk/debug/app-debug.apk
+
+# ✅ مشاهده لاگ‌ها
+adb logcat | grep -i "TWA\|Cronet"
+
+# ✅ بررسی اینکه address bar نشون داده نمیشه
+# اگه address bar دیدی، یعنی assetlinks.json مشکل داره!
+```
+
+---
+
+## 🎨 بخش سوم: بسته‌بندی با PWABuilder (ساده‌تر)
+
+### ۱۲. مراحل PWABuilder
+
+```markdown
+## مراحل بسته‌بندی با PWABuilder:
+
+### ۱. ورود به PWABuilder
+- برو به [pwabuilder.com](https://www.pwabuilder.com/)
+- URL سایتت رو وارد کن
+
+### ۲. بررسی امتیاز PWA
+- PWABuilder manifest رو تحلیل می‌کنه
+- اگه امتیاز کمه، مشکلات رو رفع کن
+
+### ۳. انتخاب Android
+- روی "Package for Stores" کلیک کن
+- پلتفرم "Android" رو انتخاب کن
+
+### ۴. تنظیمات
+- **Package Name**: com.example.myapp
+- **Key Store**: یه keystore جدید بساز یا آپلود کن
+- **Signing Key**: پسورد keystore رو وارد کن
+
+### ۵. دانلود
+- PWABuilder یه ZIP می‌ده
+- شامل: `.aab` و `.apk` و `assetlinks.json`
+```
+
+### ۱۳. کامپوننت راهنمای PWABuilder
+
+```jsx
+// components/PWABuilderGuide.jsx
+export function PWABuilderGuide() {
+  const steps = [
+    {
+      title: '۱. آماده‌سازی PWA',
+      items: [
+        'manifest.json معتبر بساز',
+        'آیکون‌های 192 و 512 اضافه کن',
+        'Service Worker ثبت کن',
+        'HTTPS فعال کن',
+        'display: standalone تنظیم کن',
+      ],
+    },
+    {
+      title: '۲. تنظیم Digital Asset Links',
+      items: [
+        'فایل assetlinks.json بساز',
+        'در /.well-known/assetlinks.json قرار بده',
+        'SHA-256 fingerprint رو درست تنظیم کن',
+        'با curl تست کن',
+      ],
+    },
+    {
+      title: '۳. بسته‌بندی با PWABuilder',
+      items: [
+        'برو به pwabuilder.com',
+        'URL سایتت رو وارد کن',
+        'Package for Android رو انتخاب کن',
+        'Keystore بساز یا آپلود کن',
+        'فایل ZIP رو دانلود کن',
+      ],
+    },
+    {
+      title: '۴. تست محلی',
+      items: [
+        'APK رو با adb نصب کن',
+        'چک کن address bar نشون داده نمیشه',
+        'Notification رو تست کن',
+        'Shortcut رو تست کن',
+      ],
+    },
+    {
+      title: '۵. انتشار در Google Play',
+      items: [
+        'حساب Google Play Developer بساز (۲۵ دلار)',
+        'Create new app رو بزن',
+        'فایل .aab رو آپلود کن',
+        'Screenshots و توضیحات اضافه کن',
+        'Submit for review رو بزن',
+      ],
+    },
+  ];
+
+  return (
+    <div className="max-w-2xl mx-auto p-6 bg-white rounded-xl shadow-lg space-y-6">
+      <h2 className="text-2xl font-bold">📋 راهنمای انتشار در Google Play</h2>
+
+      <div className="space-y-4">
+        {steps.map((step, idx) => (
+          <div key={idx} className="border border-gray-200 rounded-lg p-4">
+            <h3 className="font-bold text-lg mb-2">{step.title}</h3>
+            <ul className="space-y-1">
+              {step.items.map((item, i) => (
+                <li key={i} className="flex items-start gap-2 text-sm">
+                  <span className="text-green-600 mt-0.5">✓</span>
+                  <span>{item}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </div>
+
+      <div className="flex gap-2">
+        <a
+          href="https://www.pwabuilder.com/"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex-1 bg-blue-600 text-white text-center px-4 py-3 rounded-lg hover:bg-blue-700 font-medium"
+        >
+          🔧 PWABuilder
+        </a>
+        <a
+          href="https://play.google.com/console"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex-1 bg-green-600 text-white text-center px-4 py-3 rounded-lg hover:bg-green-700 font-medium"
+        >
+          🏪 Google Play Console
+        </a>
+      </div>
+    </div>
+  );
+}
+```
+
+---
+
+## 🔔 بخش چهارم: ویژگی‌های پیشرفته TWA
+
+### ۱۴. Delegation: Notifications
+
+```json
+// twa-manifest.json (بخش features)
+{
+  "features": {
+    "notifications": {
+      "delegateCode": "com.example.myapp.NOTIFICATION_DELEGATION"
+    }
+  }
+}
+```
+
+### ۱۵. Delegation: Contacts
+
+```json
+// twa-manifest.json
+{
+  "features": {
+    "contacts": {
+      "delegateCode": "com.example.myapp.CONTACTS_DELEGATION"
+    }
+  }
+}
+```
+
+### ۱۶. First Run Experience
+
+```java
+// app/src/main/java/com/example/myapp/LauncherActivity.java
+package com.example.myapp;
+
+import com.google.androidbrowserhelper.trusted.LauncherActivity;
+
+public class LauncherActivity extends LauncherActivity {
+    @Override
+    protected boolean shouldShowFirstRunExperience() {
+        // ✅ نمایش First Run Experience فقط بار اول
+        return true;
+    }
+}
+```
+
+### ۱۷. Splash Screen سفارشی
+
+```xml
+<!-- app/src/main/res/values/styles.xml -->
+<style name="Theme.MyApp" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+    <item name="android:windowSplashScreenBackground">@color/blue</item>
+    <item name="android:windowSplashScreenAnimatedIcon">@drawable/splash_icon</item>
+    <item name="android:windowSplashScreenAnimationDuration">300</item>
+</style>
+```
+
+---
+
+## 🧪 بخش پنجم: تست و دیباگ
+
+### ۱۸. بررسی TWA با adb
+
+```bash
+# ✅ بررسی اینکه TWA فعاله
+adb shell dumpsys package com.example.myapp | grep -i "trusted"
+
+# ✅ مشاهده لاگ‌های TWA
+adb logcat -s "TWA" "Cronet"
+
+# ✅ بررسی assetlinks از دستگاه
+adb shell pm get-app-links com.example.myapp
+
+# ✅ تأیید مجدد assetlinks
+adb shell pm set-app-links --package com.example.myapp 0 all
+adb shell pm verify-app-links --re-verify com.example.myapp
+adb shell pm get-app-links com.example.myapp
+```
+
+### ۱۹. کامپوننت TWA Debug
+
+```jsx
+// components/TWADebug.jsx
+import { useState, useEffect } from 'react';
+
+export function TWADebug() {
+  const [info, setInfo] = useState(null);
+
+  useEffect(() => {
+    const checkTWA = async () => {
+      const data = {
+        isStandalone: window.matchMedia('(display-mode: standalone)').matches,
+        isInstalled: window.matchMedia('(display-mode: standalone)').matches || 
+                     window.navigator.standalone === true,
+        userAgent: navigator.userAgent,
+        isChrome: /Chrome/.test(navigator.userAgent),
+        isAndroid: /Android/.test(navigator.userAgent),
+        chromeVersion: navigator.userAgent.match(/Chrome\/(\d+)/)?.[1],
+      };
+
+      setInfo(data);
+
+      // ✅ بررسی assetlinks.json
+      try {
+        const response = await fetch('/.well-known/assetlinks.json');
+        data.assetLinksStatus = response.ok ? '✅ موجود' : '❌ ناموجود';
+      } catch {
+        data.assetLinksStatus = '❌ خطا';
+      }
+
+      setInfo({ ...data });
+    };
+
+    checkTWA();
+  }, []);
+
+  if (!info) return <p>در حال بررسی...</p>;
+
+  return (
+    <div className="p-6 bg-gray-50 rounded-lg space-y-3 font-mono text-sm">
+      <h3 className="font-bold text-lg">🔍 TWA Debug Info</h3>
+      <div className="space-y-1">
+        <p>Display Mode: {info.isStandalone ? '✅ standalone' : '❌ browser'}</p>
+        <p>Installed: {info.isInstalled ? '✅' : '❌'}</p>
+        <p>Platform: {info.isAndroid ? 'Android' : 'Other'}</p>
+        <p>Browser: {info.isChrome ? `Chrome ${info.chromeVersion}` : 'Other'}</p>
+        <p>Asset Links: {info.assetLinksStatus}</p>
+      </div>
+    </div>
+  );
+}
+```
+
+---
+
+## 🚀 بخش ششم: انتشار در Google Play
+
+### ۲۰. مراحل انتشار
+
+```markdown
+## انتشار در Google Play:
+
+### ۱. ثبت‌نام در Google Play Console
+- برو به [play.google.com/console](https://play.google.com/console)
+- حساب Developer ثبت کن (۲۵ دلار یک‌باره)
+
+### ۲. ساخت اپ جدید
+- روی "Create app" کلیک کن
+- نام اپ، زبان پیش‌فرض، نوع اپ (App/Game) رو انتخاب کن
+
+### ۳. پر کردن اطلاعات
+- **App name**: نام اپ
+- **Description**: توضیحات کامل (حداقل ۸۰ کاراکتر)
+- **Category**: Shopping، Productivity، etc.
+- **Contact**: ایمیل، وب‌سایت، تلفن
+- **Privacy Policy**: لینک به سیاست حریم خصوصی
+
+### ۴. آپلود تصاویر
+- **App icon**: 512×512 PNG
+- **Feature graphic**: 1024×500 PNG
+- **Screenshots**: حداقل ۲ تا (16:9 یا 9:16)
+- **Phone screenshots**: حداقل ۲ تا
+
+### ۵. آپلود بسته
+- فایل `.aab` (Android App Bundle) رو آپلود کن
+- Google Play خودش APK‌های مناسب رو برای دستگاه‌های مختلف تولید می‌کنه
+
+### ۶. تنظیم قیمت و توزیع
+- **Free** یا **Paid**
+- **Countries**: انتخاب کشورها
+- **Content rating**: پر کردن پرسشنامه
+
+### ۷. سابمیت برای بررسی
+- روی "Review release" کلیک کن
+- بعد "Start rollout to production"
+- بررسی معمولاً ۱-۷ روز طول می‌کشه
+
+### ۸. انتشار
+- بعد از تأیید، اپ در Google Play منتشر میشه
+- کاربران می‌تونن نصب کنن
+```
+
+### ۲۱. کامپوننت انتشار
+
+```jsx
+// components/GooglePlayPublishing.jsx
+export function GooglePlayPublishing() {
+  return (
+    <div className="max-w-2xl mx-auto p-6 bg-white rounded-xl shadow-lg space-y-6">
+      <h2 className="text-2xl font-bold">🚀 انتشار در Google Play</h2>
+
+      <div className="grid grid-cols-2 gap-4">
+        <div className="p-4 bg-blue-50 rounded-lg">
+          <h3 className="font-bold mb-2">📦 فایل‌های مورد نیاز</h3>
+          <ul className="text-sm space-y-1">
+            <li>✅ فایل .aab (Android App Bundle)</li>
+            <li>✅ App icon (512×512 PNG)</li>
+            <li>✅ Feature graphic (1024×500 PNG)</li>
+            <li>✅ Screenshots (حداقل ۲ تا)</li>
+            <li>✅ Privacy Policy URL</li>
+          </ul>
+        </div>
+
+        <div className="p-4 bg-green-50 rounded-lg">
+          <h3 className="font-bold mb-2">💰 هزینه‌ها</h3>
+          <ul className="text-sm space-y-1">
+            <li>✅ Google Play Developer: ۲۵ دلار (یک‌باره)</li>
+            <li>✅ Service Fee: ۱۵٪ (برای اپ‌های پولی)</li>
+            <li>✅ بررسی: ۱-۷ روز</li>
+          </ul>
+        </div>
+      </div>
+
+      <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+        <h3 className="font-bold mb-2">⚠️ نکات مهم</h3>
+        <ul className="text-sm space-y-1">
+          <li>• Privacy Policy الزامیه</li>
+          <li>• Content Rating باید پر بشه</li>
+          <li>• Data Safety Form باید تکمیل بشه</li>
+          <li>• Target API Level: حداقل 33 (Android 13)</li>
+        </ul>
+      </div>
+
+      <a
+        href="https://play.google.com/console"
+        target="_blank"
+        rel="noopener noreferrer"
+        className="block w-full bg-green-600 text-white text-center px-6 py-3 rounded-lg hover:bg-green-700 font-medium"
+      >
+        🏪 باز کردن Google Play Console
+      </a>
+    </div>
+  );
+}
+```
+
+---
+
+## 🔄 بخش هفتم: آپدیت اپ
+
+### ۲۲. آپدیت TWA
+
+```bash
+# ✅ افزایش versionCode و versionName
+# در twa-manifest.json:
+{
+  "appVersionCode": 2,
+  "appVersionName": "1.0.1"
+}
+
+# ✅ build مجدد
+bubblewrap build
+
+# ✅ آپلود .aab جدید در Google Play Console
+# Google Play خودش آپدیت رو برای کاربران منتشر می‌کنه
+```
+
+### ۲۳. هوک تشخیص TWA
+
+```jsx
+// hooks/useIsTWA.js
+import { useState, useEffect } from 'react';
+
+export function useIsTWA() {
+  const [isTWA, setIsTWA] = useState(false);
+
+  useEffect(() => {
+    const check = () => {
+      // ✅ بررسی display-mode: standalone
+      const isStandalone = window.matchMedia('(display-mode: standalone)').matches;
+      
+      // ✅ بررسی user agent (TWA معمولاً Chrome engine داره)
+      const isChrome = /Chrome/.test(navigator.userAgent);
+      const isAndroid = /Android/.test(navigator.userAgent);
+      
+      setIsTWA(isStandalone && isChrome && isAndroid);
+    };
+
+    check();
+  }, []);
+
+  return isTWA;
+}
+
+// ✅ استفاده:
+function App() {
+  const isTWA = useIsTWA();
+  
+  return (
+    <div>
+      {isTWA ? (
+        <p>🤖 در حال اجرای TWA</p>
+      ) : (
+        <p>🌐 در حال اجرای وب</p>
+      )}
+    </div>
+  );
+}
+```
+
+---
+
+**🔗 ابزار تست و انتشار**
+
+- **[PWABuilder](https://www.pwabuilder.com/)**: ابزار ساده برای بسته‌بندی
+- **[Bubblewrap](https://github.com/GoogleChromeLabs/bubblewrap)**: CLI tool حرفه‌ای
+- **[Google Play Console](https://play.google.com/console)**: داشبورد مدیریت Store
+- **[Digital Asset Links API](https://developers.google.com/digital-asset-links/v1/getting-started)**: بررسی assetlinks
+- **[TWA Quality Checklist](https://developer.chrome.com/docs/android/trusted-web-activity/quality-criteria/)**: چک‌لیست کیفیت
+- **adb**: برای تست محلی
+- **Android Studio**: برای دیباگ پیشرفته
+
+**⚠️ چک‌لیست نهایی**
+
+**آماده‌سازی PWA:**
+- [ ] manifest.json معتبر با display: standalone؟
+- [ ] آیکون‌های 192 و 512 موجودن؟
+- [ ] Service Worker ثبت شده؟
+- [ ] سایت روی HTTPS هست؟
+
+**Digital Asset Links:**
+- [ ] فایل assetlinks.json در /.well-known/ قرار گرفته؟
+- [ ] Content-Type: application/json هست؟
+- [ ] SHA-256 fingerprint درست تنظیم شده؟
+- [ ] package_name با اپ یکیه؟
+- [ ] با curl تست شده؟
+
+**بسته‌بندی:**
+- [ ] با Bubblewrap یا PWABuilder بسته‌بندی کردی؟
+- [ ] versionCode و versionName درست تنظیم شدن؟
+- [ ] Keystore امن نگه‌داری شده؟
+- [ ] APK محلی تست شده؟
+
+**تست:**
+- [ ] address bar نشون داده نمیشه؟
+- [ ] Notification کار می‌کنه؟
+- [ ] Shortcut کار می‌کنه؟
+- [ ] کار آفلاین تست شده؟
+
+**Google Play:**
+- [ ] حساب Developer ثبت شده؟
+- [ ] Privacy Policy آماده‌ست؟
+- [ ] Screenshots با کیفیت داری؟
+- [ ] Data Safety Form تکمیل شده؟
+- [ ] Content Rating پر شده؟
+
+> **قانون ۳ ثانیه‌ای:** APK رو روی دستگاه اندروید نصب کن و باز کن. آیا address bar مرورگر نشون داده میشه؟ اگه بله، یعنی assetlinks.json مشکل داره! بعد `adb shell pm get-app-links com.example.myapp` رو اجرا کن؛ باید `verified` نشون بده. اگه `none` یا `legacy_failure` بود، یعنی SHA-256 fingerprint اشتباهه!

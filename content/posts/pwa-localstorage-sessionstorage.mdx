@@ -1,0 +1,607 @@
+---
+title: "PWA: LocalStorage و SessionStorage - ذخیره‌سازی ساده در مرورگر"
+date: '2026-10-01'
+playlist: 'PWA - برنامه وب پیشرونده'
+tags: ['PWA', 'LocalStorage', 'SessionStorage', 'Web-Storage', 'React', 'Offline', 'Storage']
+description: "چطور با LocalStorage و SessionStorage داده‌های ساده رو در مرورگر ذخیره کنیم، محدودیت‌هاشون چیه و چطور یه wrapper امن و type-safe بسازیم."
+enableComment: true
+---
+
+# 💾 PWA: LocalStorage و SessionStorage - ذخیره‌سازی ساده
+
+**💡 مفهوم کلیدی**  
+دو API ساده برای ذخیره‌سازی داده در مرورگر:
+- **LocalStorage**: داده‌ها **دائمی** هستن (تا وقتی کاربر پاکشون نکنه) و بین همه‌ی تب‌های همون origin به اشتراک گذاشته میشن.
+- **SessionStorage**: داده‌ها **موقتی** هستن (تا وقتی تب بسته بشه) و فقط در همون تب در دسترسن.
+
+هر دو **فقط string** ذخیره می‌کنن، **sync** هستن (UI رو بلاک می‌کنن) و **۵-۱۰ مگابایت** ظرفیت دارن. برای تنظیمات کوچک، تم کاربر، token و داده‌های ساده مناسبن - ولی برای داده‌های حجیم از IndexedDB استفاده کن.
+
+**⚠️ دام رایج**  
+- ذخیره‌ی object بدون `JSON.stringify` → تبدیل به `"[object Object]"` میشه!
+- فراموش کردن `JSON.parse` با try/catch → اگه داده خراب باشه، اپ کرش می‌کنه.
+- عدم مدیریت `QuotaExceededError` → وقتی فضا پر میشه، اپ کرش می‌کنه.
+- استفاده در SSR (Next.js) → `window is not defined` خطا میده.
+- ذخیره‌ی داده‌های حساس (JWT، پسورد) → در برابر XSS آسیب‌پذیره.
+- عدم گوش دادن به `storage` event → تغییرات در تب دیگه sync نمیشه.
+- استفاده برای داده‌های حجیم (بیشتر از ۵MB) → خطای quota میده.
+- عدم بررسی `null` هنگام خواندن → `Cannot read property of null`.
+
+**📏 مقایسه LocalStorage vs SessionStorage**
+
+| ویژگی              | LocalStorage          | SessionStorage        |
+|--------------------|------------------------|------------------------|
+| ماندگاری           | دائمی (تا پاک شدن)    | موقتی (تا بسته شدن تب) |
+| ظرفیت              | ۵-۱۰ MB               | ۵-۱۰ MB               |
+| اشتراک بین تب‌ها   | ✅ بله                 | ❌ خیر                 |
+| نوع داده           | فقط string            | فقط string            |
+| Sync/Async         | Sync ❌               | Sync ❌               |
+| در Service Worker  | ✅ بله                 | ❌ خیر                 |
+| مناسب برای         | تنظیمات، token، theme | داده‌ی فرم، wizard    |
+
+**🛠️ راه‌حل سریع در کد**
+
+### ۱. هوک امن و type-safe برای LocalStorage
+
+```jsx
+// hooks/useLocalStorage.js
+import { useState, useCallback, useEffect } from 'react';
+
+export function useLocalStorage(key, initialValue) {
+  // ✅ مقدار اولیه: از localStorage بخون یا initialValue استفاده کن
+  const [storedValue, setStoredValue] = useState(() => {
+    if (typeof window === 'undefined') {
+      return initialValue; // ✅ SSR safe
+    }
+
+    try {
+      const item = window.localStorage.getItem(key);
+      return item ? JSON.parse(item) : initialValue;
+    } catch (error) {
+      console.warn(`Error reading localStorage key "${key}":`, error);
+      return initialValue;
+    }
+  });
+
+  // ✅ ذخیره‌ی مقدار جدید
+  const setValue = useCallback((value) => {
+    try {
+      const valueToStore = value instanceof Function ? value(storedValue) : value;
+      setStoredValue(valueToStore);
+      
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(key, JSON.stringify(valueToStore));
+      }
+    } catch (error) {
+      if (error.name === 'QuotaExceededError') {
+        console.error('localStorage quota exceeded!');
+        // ✅ می‌تونی اینجا داده‌های قدیمی رو پاک کنی
+      }
+      console.warn(`Error setting localStorage key "${key}":`, error);
+    }
+  }, [key, storedValue]);
+
+  // ✅ حذف مقدار
+  const removeValue = useCallback(() => {
+    try {
+      if (typeof window !== 'undefined') {
+        window.localStorage.removeItem(key);
+      }
+      setStoredValue(initialValue);
+    } catch (error) {
+      console.warn(`Error removing localStorage key "${key}":`, error);
+    }
+  }, [key, initialValue]);
+
+  // ✅ گوش دادن به تغییرات از تب دیگه
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const handleStorageChange = (event) => {
+      if (event.key === key && event.newValue !== null) {
+        try {
+          setStoredValue(JSON.parse(event.newValue));
+        } catch (error) {
+          console.warn(`Error parsing storage event for key "${key}":`, error);
+        }
+      } else if (event.key === key && event.newValue === null) {
+        setStoredValue(initialValue);
+      }
+    };
+
+    window.addEventListener('storage', handleStorageChange);
+    return () => window.removeEventListener('storage', handleStorageChange);
+  }, [key, initialValue]);
+
+  return [storedValue, setValue, removeValue];
+}
+
+// ✅ استفاده:
+function ThemeToggle() {
+  const [theme, setTheme] = useLocalStorage('theme', 'light');
+
+  return (
+    <button
+      onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}
+      className="p-2 bg-gray-200 dark:bg-gray-800 rounded"
+    >
+      {theme === 'light' ? '🌙' : '☀️'}
+    </button>
+  );
+}
+```
+
+### ۲. هوک برای SessionStorage
+
+```jsx
+// hooks/useSessionStorage.js
+import { useState, useCallback } from 'react';
+
+export function useSessionStorage(key, initialValue) {
+  const [storedValue, setStoredValue] = useState(() => {
+    if (typeof window === 'undefined') {
+      return initialValue;
+    }
+
+    try {
+      const item = window.sessionStorage.getItem(key);
+      return item ? JSON.parse(item) : initialValue;
+    } catch (error) {
+      console.warn(`Error reading sessionStorage key "${key}":`, error);
+      return initialValue;
+    }
+  });
+
+  const setValue = useCallback((value) => {
+    try {
+      const valueToStore = value instanceof Function ? value(storedValue) : value;
+      setStoredValue(valueToStore);
+      
+      if (typeof window !== 'undefined') {
+        window.sessionStorage.setItem(key, JSON.stringify(valueToStore));
+      }
+    } catch (error) {
+      if (error.name === 'QuotaExceededError') {
+        console.error('sessionStorage quota exceeded!');
+      }
+      console.warn(`Error setting sessionStorage key "${key}":`, error);
+    }
+  }, [key, storedValue]);
+
+  const removeValue = useCallback(() => {
+    try {
+      if (typeof window !== 'undefined') {
+        window.sessionStorage.removeItem(key);
+      }
+      setStoredValue(initialValue);
+    } catch (error) {
+      console.warn(`Error removing sessionStorage key "${key}":`, error);
+    }
+  }, [key, initialValue]);
+
+  return [storedValue, setValue, removeValue];
+}
+
+// ✅ استفاده: ذخیره‌ی state فرم چندمرحله‌ای
+function MultiStepForm() {
+  const [formData, setFormData] = useSessionStorage('wizard-form', {
+    step: 1,
+    name: '',
+    email: '',
+  });
+
+  return (
+    <div>
+      <input
+        value={formData.name}
+        onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+        placeholder="نام"
+      />
+      <p>Step: {formData.step}</p>
+    </div>
+  );
+}
+```
+
+### ۳. Wrapper حرفه‌ای با fallback و encryption
+
+```js
+// lib/storage.js
+
+// ✅ بررسی پشتیبانی
+export const isLocalStorageSupported = () => {
+  if (typeof window === 'undefined') return false;
+  
+  try {
+    const testKey = '__storage_test__';
+    window.localStorage.setItem(testKey, 'test');
+    window.localStorage.removeItem(testKey);
+    return true;
+  } catch (e) {
+    return false;
+  }
+};
+
+// ✅ Fallback: in-memory storage
+const memoryStorage = {
+  store: new Map(),
+  getItem(key) { return this.store.get(key) || null; },
+  setItem(key, value) { this.store.set(key, value); },
+  removeItem(key) { this.store.delete(key); },
+  clear() { this.store.clear(); },
+};
+
+// ✅ انتخاب storage مناسب
+export const getStorage = (type = 'local') => {
+  if (!isLocalStorageSupported()) {
+    console.warn('Storage not supported, using in-memory fallback');
+    return memoryStorage;
+  }
+  
+  return type === 'session' ? window.sessionStorage : window.localStorage;
+};
+
+// ✅ Safe get
+export const storageGet = (key, defaultValue = null, type = 'local') => {
+  try {
+    const storage = getStorage(type);
+    const item = storage.getItem(key);
+    
+    if (item === null) return defaultValue;
+    
+    // ✅ تلاش برای parse JSON
+    try {
+      return JSON.parse(item);
+    } catch {
+      return item; // اگه JSON نبود، همون string رو برگردون
+    }
+  } catch (error) {
+    console.warn(`Storage get error for key "${key}":`, error);
+    return defaultValue;
+  }
+};
+
+// ✅ Safe set
+export const storageSet = (key, value, type = 'local') => {
+  try {
+    const storage = getStorage(type);
+    const serialized = JSON.stringify(value);
+    storage.setItem(key, serialized);
+    return true;
+  } catch (error) {
+    if (error.name === 'QuotaExceededError') {
+      console.error('Storage quota exceeded!');
+      
+      // ✅ تلاش برای پاک کردن داده‌های قدیمی
+      try {
+        const storage = getStorage(type);
+        const keys = Object.keys(storage);
+        if (keys.length > 0) {
+          storage.removeItem(keys[0]); // پاک کردن اولین key
+          storage.setItem(key, JSON.stringify(value)); // تلاش دوباره
+          return true;
+        }
+      } catch (retryError) {
+        console.error('Retry failed:', retryError);
+      }
+    }
+    return false;
+  }
+};
+
+// ✅ Safe remove
+export const storageRemove = (key, type = 'local') => {
+  try {
+    const storage = getStorage(type);
+    storage.removeItem(key);
+    return true;
+  } catch (error) {
+    console.warn(`Storage remove error for key "${key}":`, error);
+    return false;
+  }
+};
+
+// ✅ پاک کردن همه
+export const storageClear = (type = 'local') => {
+  try {
+    const storage = getStorage(type);
+    storage.clear();
+    return true;
+  } catch (error) {
+    console.warn('Storage clear error:', error);
+    return false;
+  }
+};
+
+// ✅ بررسی فضای استفاده‌شده
+export const getStorageUsage = (type = 'local') => {
+  try {
+    const storage = getStorage(type);
+    let total = 0;
+    
+    for (const key in storage) {
+      if (storage.hasOwnProperty(key)) {
+        total += storage[key].length + key.length;
+      }
+    }
+    
+    return {
+      bytes: total * 2, // هر کاراکتر UTF-16 = 2 bytes
+      KB: ((total * 2) / 1024).toFixed(2),
+      MB: ((total * 2) / 1024 / 1024).toFixed(2),
+    };
+  } catch (error) {
+    return null;
+  }
+};
+```
+
+### ۴. استفاده در کامپوننت
+
+```jsx
+// components/UserPreferences.jsx
+import { useState, useEffect } from 'react';
+import { storageGet, storageSet, getStorageUsage } from '@/lib/storage';
+
+export function UserPreferences() {
+  const [language, setLanguage] = useState('fa');
+  const [notifications, setNotifications] = useState(true);
+  const [fontSize, setFontSize] = useState(16);
+  const [usage, setUsage] = useState(null);
+
+  // ✅ بارگذاری تنظیمات از localStorage
+  useEffect(() => {
+    const saved = storageGet('user-preferences', {});
+    
+    if (saved.language) setLanguage(saved.language);
+    if (saved.notifications !== undefined) setNotifications(saved.notifications);
+    if (saved.fontSize) setFontSize(saved.fontSize);
+    
+    setUsage(getStorageUsage('local'));
+  }, []);
+
+  // ✅ ذخیره تنظیمات
+  const savePreferences = () => {
+    const preferences = { language, notifications, fontSize };
+    const success = storageSet('user-preferences', preferences);
+    
+    if (success) {
+      alert('✅ تنظیمات ذخیره شد');
+      setUsage(getStorageUsage('local'));
+    } else {
+      alert('❌ خطا در ذخیره تنظیمات');
+    }
+  };
+
+  return (
+    <div className="max-w-md mx-auto p-6 bg-white rounded-xl shadow-lg space-y-4">
+      <h2 className="text-xl font-bold">⚙️ تنظیمات کاربر</h2>
+
+      {/* ✅ زبان */}
+      <div>
+        <label className="block text-sm font-medium mb-1">زبان</label>
+        <select
+          value={language}
+          onChange={(e) => setLanguage(e.target.value)}
+          className="w-full p-2 border border-gray-300 rounded"
+        >
+          <option value="fa">فارسی</option>
+          <option value="en">English</option>
+          <option value="ar">العربية</option>
+        </select>
+      </div>
+
+      {/* ✅ اعلان‌ها */}
+      <div>
+        <label className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={notifications}
+            onChange={(e) => setNotifications(e.target.checked)}
+          />
+          <span className="text-sm">فعال‌سازی اعلان‌ها</span>
+        </label>
+      </div>
+
+      {/* ✅ اندازه فونت */}
+      <div>
+        <label className="block text-sm font-medium mb-1">
+          اندازه فونت: {fontSize}px
+        </label>
+        <input
+          type="range"
+          min="12"
+          max="24"
+          value={fontSize}
+          onChange={(e) => setFontSize(Number(e.target.value))}
+          className="w-full"
+        />
+      </div>
+
+      {/* ✅ ذخیره */}
+      <button
+        onClick={savePreferences}
+        className="w-full bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700"
+      >
+        💾 ذخیره تنظیمات
+      </button>
+
+      {/* ✅ نمایش فضای استفاده‌شده */}
+      {usage && (
+        <div className="p-3 bg-gray-50 rounded-lg text-xs text-gray-600">
+          <p>فضای استفاده‌شده: {usage.KB} KB ({usage.MB} MB)</p>
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+### ۵. Sync بین تب‌ها
+
+```jsx
+// hooks/useStorageSync.js
+import { useEffect } from 'react';
+
+export function useStorageSync(key, callback) {
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const handleStorageChange = (event) => {
+      if (event.key === key) {
+        try {
+          const newValue = event.newValue ? JSON.parse(event.newValue) : null;
+          callback(newValue, event.oldValue ? JSON.parse(event.oldValue) : null);
+        } catch (error) {
+          console.warn('Storage sync error:', error);
+        }
+      }
+    };
+
+    window.addEventListener('storage', handleStorageChange);
+    return () => window.removeEventListener('storage', handleStorageChange);
+  }, [key, callback]);
+}
+
+// ✅ استفاده: sync کردن login state بین تب‌ها
+function App() {
+  useStorageSync('auth-token', (newToken, oldToken) => {
+    if (newToken && !oldToken) {
+      console.log('✅ User logged in in another tab');
+      window.location.reload();
+    } else if (!newToken && oldToken) {
+      console.log('🚪 User logged out in another tab');
+      window.location.href = '/login';
+    }
+  });
+
+  return <div>...</div>;
+}
+```
+
+### ۶. ذخیره‌ی امن (با encryption ساده)
+
+```js
+// lib/secure-storage.js
+
+// ✅ XOR encryption ساده (برای داده‌های غیرحیاتی)
+const xorEncrypt = (text, key = 'secret-key') => {
+  let result = '';
+  for (let i = 0; i < text.length; i++) {
+    result += String.fromCharCode(
+      text.charCodeAt(i) ^ key.charCodeAt(i % key.length)
+    );
+  }
+  return btoa(result); // base64 encode
+};
+
+const xorDecrypt = (encrypted, key = 'secret-key') => {
+  const decoded = atob(encrypted);
+  let result = '';
+  for (let i = 0; i < decoded.length; i++) {
+    result += String.fromCharCode(
+      decoded.charCodeAt(i) ^ key.charCodeAt(i % key.length)
+    );
+  }
+  return result;
+};
+
+// ✅ Secure storage
+export const secureStorageSet = (key, value) => {
+  try {
+    const serialized = JSON.stringify(value);
+    const encrypted = xorEncrypt(serialized);
+    window.localStorage.setItem(key, encrypted);
+    return true;
+  } catch (error) {
+    console.error('Secure storage set error:', error);
+    return false;
+  }
+};
+
+export const secureStorageGet = (key) => {
+  try {
+    const encrypted = window.localStorage.getItem(key);
+    if (!encrypted) return null;
+    
+    const decrypted = xorDecrypt(encrypted);
+    return JSON.parse(decrypted);
+  } catch (error) {
+    console.error('Secure storage get error:', error);
+    return null;
+  }
+};
+
+// ✅ استفاده:
+secureStorageSet('user-token', 'abc123xyz');
+const token = secureStorageGet('user-token'); // 'abc123xyz'
+```
+
+### ۷. پاک‌سازی خودکار داده‌های قدیمی
+
+```js
+// lib/storage-cleanup.js
+
+export const cleanupOldStorage = (maxAgeMs = 7 * 24 * 60 * 60 * 1000) => {
+  // ✅ پاک کردن داده‌های قدیمی‌تر از ۷ روز
+  try {
+    const now = Date.now();
+    const keysToRemove = [];
+
+    for (let i = 0; i < window.localStorage.length; i++) {
+      const key = window.localStorage.key(i);
+      
+      if (key.startsWith('temp-') || key.startsWith('cache-')) {
+        const item = window.localStorage.getItem(key);
+        
+        try {
+          const parsed = JSON.parse(item);
+          
+          if (parsed.timestamp && (now - parsed.timestamp) > maxAgeMs) {
+            keysToRemove.push(key);
+          }
+        } catch {
+          // اگه JSON نبود، skip کن
+        }
+      }
+    }
+
+    keysToRemove.forEach((key) => window.localStorage.removeItem(key));
+    
+    console.log(`✅ Cleaned up ${keysToRemove.length} old storage items`);
+    return keysToRemove.length;
+  } catch (error) {
+    console.error('Storage cleanup error:', error);
+    return 0;
+  }
+};
+
+// ✅ اجرا هنگام لود اپ
+if (typeof window !== 'undefined') {
+  cleanupOldStorage();
+}
+```
+
+**🔗 ابزار تست**
+
+- **Chrome DevTools** → Application → Local Storage / Session Storage.
+- **Console**: `localStorage.setItem('test', 'value')` و `localStorage.getItem('test')`.
+- **DevTools** → Application → Storage → Clear site data (پاک کردن همه).
+- **Console**: `Object.keys(localStorage).length` برای شمارش keyها.
+- **Quota Test**: داده‌ی بزرگ ذخیره کن تا QuotaExceededError بگیری.
+- **Multi-tab Test**: دو تب باز کن، در یکی تغییر بده، در دیگری `storage` event رو گوش کن.
+
+**⚠️ چک‌لیست نهایی**
+
+- [ ] استفاده از `JSON.stringify` و `JSON.parse` با try/catch؟
+- [ ] بررسی `typeof window !== 'undefined'` برای SSR؟
+- [ ] مدیریت `QuotaExceededError`؟
+- [ ] بررسی `null` هنگام خواندن؟
+- [ ] گوش دادن به `storage` event برای sync بین تب‌ها؟
+- [ ] عدم ذخیره‌ی داده‌های حساس (JWT، پسورد)؟
+- [ ] استفاده از SessionStorage برای داده‌های موقتی؟
+- [ ] Fallback به in-memory storage؟
+- [ ] پاک‌سازی خودکار داده‌های قدیمی؟
+- [ ] تست در Chrome DevTools → Application؟
+- [ ] تست در حالت Incognito (بعضی مرورگرها localStorage رو بلاک می‌کنن)؟
+
+> **قانون ۳ ثانیه‌ای:** DevTools → Application → Local Storage رو باز کن. آیا داده‌های شما اونجا هستن؟ بعد Console رو باز کن و بنویس `localStorage.setItem('test', JSON.stringify({ a: 1 }))`. بعد `JSON.parse(localStorage.getItem('test'))` رو اجرا کن؛ باید `{ a: 1 }` برگردونه. بعد یه تب دیگه باز کن و `localStorage.setItem('test', JSON.stringify({ a: 2 }))` رو اجرا کن؛ آیا تب اول `storage` event رو می‌گیره؟ اگه نه، یعنی sync پیاده‌سازی نکردی!

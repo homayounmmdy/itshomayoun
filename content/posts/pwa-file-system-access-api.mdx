@@ -1,0 +1,865 @@
+---
+title: "PWA: File System Access API و دسترسی به فایل‌های محلی"
+date: '2026-10-01'
+playlist: 'PWA - برنامه وب پیشرونده'
+tags: ['PWA', 'File-System-Access-API', 'Local-Files', 'FileSystem', 'React', 'Storage']
+description: "چطور با File System Access API مستقیماً با فایل‌های محلی کاربر کار کنیم، فایل‌ها رو باز/ویرایش/ذخیره کنیم و یه ادیتور حرفه‌ای بسازیم."
+enableComment: true
+---
+
+# 📁 PWA: File System Access API و دسترسی به فایل‌های محلی
+
+**💡 مفهوم کلیدی**  
+File System Access API به PWA اجازه میده **مستقیماً با فایل‌های محلی کاربر** کار کنه - بدون نیاز به آپلود به سرور. می‌تونی فایل رو باز کنی، ویرایش کنی و همون‌جا ذخیره کنی (مثل VS Code، Figma، یا Photoshop تحت وب). این یعنی تجربه‌ی کاملاً اپ‌مانند برای کار با فایل‌ها.
+
+**⚠️ دام رایج**  
+- فراموش کردن `showOpenFilePicker()` نیاز به user gesture داره.
+- عدم بررسی `window.showOpenFilePicker` قبل از استفاده.
+- فراموش کردن `verifyPermission()` قبل از نوشتن.
+- عدم مدیریت `AbortError` (کاربر cancel کرد).
+- نادیده گرفتن fallback برای مرورگرهای بدون پشتیبانی (Safari, Firefox).
+- عدم استفاده از `types` برای محدود کردن فرمت فایل.
+- فراموش کردن `multiple: true` برای انتخاب چند فایل.
+- عدم مدیریت `mode: 'readwrite'` برای دسترسی نوشتن.
+
+**📏 وضعیت پشتیبانی مرورگرها**
+
+| قابلیت                    | Chrome | Edge | Firefox | Safari | iOS Safari |
+|---------------------------|--------|------|---------|--------|------------|
+| showOpenFilePicker        | ✅     | ✅   | ❌      | ❌     | ❌         |
+| showSaveFilePicker        | ✅     | ✅   | ❌      | ❌     | ❌         |
+| showDirectoryPicker       | ✅     | ✅   | ❌      | ❌     | ❌         |
+| FileSystemHandle          | ✅     | ✅   | ❌      | ❌     | ❌         |
+
+> ⚠️ **نکته حیاتی**: این API فقط در مرورگرهای **Chromium-based** کار می‌کنه. Safari و Firefox پشتیبانی نمی‌کنن. همیشه fallback بذار!
+
+---
+
+## 📂 بخش اول: باز کردن فایل
+
+### ۱. هوک React برای File System Access
+
+```jsx
+// hooks/useFileSystemAccess.js
+import { useState, useCallback } from 'react';
+
+export function useFileSystemAccess() {
+  const [isSupported, setIsSupported] = useState(false);
+  const [fileHandle, setFileHandle] = useState(null);
+  const [fileContent, setFileContent] = useState(null);
+  const [error, setError] = useState(null);
+
+  useState(() => {
+    setIsSupported('showOpenFilePicker' in window);
+  }, []);
+
+  // ✅ بررسی مجوز
+  const verifyPermission = async (handle, readWrite = false) => {
+    const options = {};
+    if (readWrite) options.mode = 'readwrite';
+
+    if ((await handle.queryPermission(options)) === 'granted') {
+      return true;
+    }
+
+    if ((await handle.requestPermission(options)) === 'granted') {
+      return true;
+    }
+
+    return false;
+  };
+
+  // ✅ باز کردن فایل
+  const openFile = useCallback(async (types = []) => {
+    if (!isSupported) {
+      setError('File System Access API پشتیبانی نمیشه');
+      return null;
+    }
+
+    try {
+      setError(null);
+
+      const [handle] = await window.showOpenFilePicker({
+        types: types.length > 0 ? [{
+          description: 'فایل‌های پشتیبانی‌شده',
+          accept: types.reduce((acc, type) => {
+            acc[type] = [`.${type}`];
+            return acc;
+          }, {}),
+        }] : undefined,
+        multiple: false,
+      });
+
+      // ✅ بررسی مجوز خواندن
+      if (!(await verifyPermission(handle, false))) {
+        setError('دسترسی به فایل رد شد');
+        return null;
+      }
+
+      // ✅ خواندن محتوا
+      const file = await handle.getFile();
+      const content = await file.text();
+
+      setFileHandle(handle);
+      setFileContent(content);
+
+      console.log(`✅ File opened: ${file.name}`);
+      return { handle, file, content };
+    } catch (err) {
+      if (err.name === 'AbortError') {
+        console.log('User cancelled file selection');
+        return null;
+      }
+      setError(err.message);
+      console.error('Failed to open file:', err);
+      return null;
+    }
+  }, [isSupported]);
+
+  // ✅ باز کردن چند فایل
+  const openMultipleFiles = useCallback(async (types = []) => {
+    if (!isSupported) {
+      setError('File System Access API پشتیبانی نمیشه');
+      return [];
+    }
+
+    try {
+      setError(null);
+
+      const handles = await window.showOpenFilePicker({
+        types: types.length > 0 ? [{
+          description: 'فایل‌های پشتیبانی‌شده',
+          accept: types.reduce((acc, type) => {
+            acc[type] = [`.${type}`];
+            return acc;
+          }, {}),
+        }] : undefined,
+        multiple: true,
+      });
+
+      const files = [];
+      for (const handle of handles) {
+        if (await verifyPermission(handle, false)) {
+          const file = await handle.getFile();
+          const content = await file.text();
+          files.push({ handle, file, content });
+        }
+      }
+
+      console.log(`✅ ${files.length} files opened`);
+      return files;
+    } catch (err) {
+      if (err.name === 'AbortError') {
+        return [];
+      }
+      setError(err.message);
+      return [];
+    }
+  }, [isSupported]);
+
+  return {
+    isSupported,
+    fileHandle,
+    fileContent,
+    error,
+    openFile,
+    openMultipleFiles,
+    verifyPermission,
+  };
+}
+```
+
+### ۲. کامپوننت باز کردن فایل
+
+```jsx
+// components/FileOpener.jsx
+import { useFileSystemAccess } from '@/hooks/useFileSystemAccess';
+
+export function FileOpener() {
+  const { isSupported, fileHandle, fileContent, error, openFile } = useFileSystemAccess();
+
+  const handleOpen = async () => {
+    const result = await openFile(['txt', 'md', 'json']);
+    if (result) {
+      console.log('File opened:', result.file.name);
+    }
+  };
+
+  if (!isSupported) {
+    return (
+      <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+        <p className="text-sm text-yellow-800">
+          ⚠️ File System Access API در این مرورگر پشتیبانی نمیشه.
+        </p>
+        <p className="text-xs text-yellow-700 mt-1">
+          لطفاً از Chrome یا Edge استفاده کنید.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <button
+        onClick={handleOpen}
+        className="w-full bg-blue-600 text-white px-6 py-3 rounded-lg 
+                   hover:bg-blue-700 transition-colors font-medium
+                   flex items-center justify-center gap-2"
+      >
+        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} 
+                d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+        </svg>
+        باز کردن فایل
+      </button>
+
+      {fileHandle && (
+        <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
+          <p className="text-sm font-medium text-green-800">
+            ✅ فایل باز شد: {fileHandle.name}
+          </p>
+          <pre className="mt-2 p-3 bg-white rounded text-xs overflow-auto max-h-64">
+            {fileContent}
+          </pre>
+        </div>
+      )}
+
+      {error && (
+        <div role="alert" className="p-3 bg-red-50 border border-red-200 rounded-lg">
+          <p className="text-sm text-red-800">{error}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+---
+
+## 💾 بخش دوم: ذخیره فایل
+
+### ۳. هوک ذخیره فایل
+
+```jsx
+// hooks/useFileSaver.js
+import { useState, useCallback } from 'react';
+
+export function useFileSaver() {
+  const [isSupported, setIsSupported] = useState(false);
+  const [fileHandle, setFileHandle] = useState(null);
+  const [error, setError] = useState(null);
+
+  useState(() => {
+    setIsSupported('showSaveFilePicker' in window);
+  }, []);
+
+  // ✅ ذخیره فایل جدید
+  const saveFile = useCallback(async (content, suggestedName = 'file.txt', types = []) => {
+    if (!isSupported) {
+      setError('File System Access API پشتیبانی نمیشه');
+      return false;
+    }
+
+    try {
+      setError(null);
+
+      const handle = await window.showSaveFilePicker({
+        suggestedName,
+        types: types.length > 0 ? [{
+          description: 'فایل‌های پشتیبانی‌شده',
+          accept: types.reduce((acc, type) => {
+            acc[type] = [`.${type}`];
+            return acc;
+          }, {}),
+        }] : undefined,
+      });
+
+      // ✅ نوشتن محتوا
+      const writable = await handle.createWritable();
+      await writable.write(content);
+      await writable.close();
+
+      setFileHandle(handle);
+      console.log(`✅ File saved: ${handle.name}`);
+      return true;
+    } catch (err) {
+      if (err.name === 'AbortError') {
+        return false;
+      }
+      setError(err.message);
+      console.error('Failed to save file:', err);
+      return false;
+    }
+  }, [isSupported]);
+
+  // ✅ ذخیره در فایل موجود (بدون prompt)
+  const saveToExistingFile = useCallback(async (content) => {
+    if (!fileHandle) {
+      setError('هیچ فایلی باز نشده');
+      return false;
+    }
+
+    try {
+      setError(null);
+
+      // ✅ بررسی مجوز نوشتن
+      if ((await fileHandle.requestPermission({ mode: 'readwrite' })) !== 'granted') {
+        setError('دسترسی نوشتن رد شد');
+        return false;
+      }
+
+      const writable = await fileHandle.createWritable();
+      await writable.write(content);
+      await writable.close();
+
+      console.log(`✅ File updated: ${fileHandle.name}`);
+      return true;
+    } catch (err) {
+      setError(err.message);
+      console.error('Failed to save file:', err);
+      return false;
+    }
+  }, [fileHandle]);
+
+  return {
+    isSupported,
+    fileHandle,
+    error,
+    saveFile,
+    saveToExistingFile,
+  };
+}
+```
+
+### ۴. کامپوننت ذخیره فایل
+
+```jsx
+// components/FileSaver.jsx
+import { useState } from 'react';
+import { useFileSaver } from '@/hooks/useFileSaver';
+
+export function FileSaver() {
+  const { isSupported, error, saveFile } = useFileSaver();
+  const [content, setContent] = useState('');
+  const [filename, setFilename] = useState('document.txt');
+  const [saving, setSaving] = useState(false);
+
+  const handleSave = async () => {
+    if (!content.trim()) return;
+
+    setSaving(true);
+    const success = await saveFile(content, filename, ['txt', 'md']);
+    
+    if (success) {
+      alert('✅ فایل با موفقیت ذخیره شد!');
+    }
+    
+    setSaving(false);
+  };
+
+  if (!isSupported) {
+    return (
+      <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+        <p className="text-sm text-yellow-800">
+          ⚠️ File System Access API پشتیبانی نمیشه.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <label className="block text-sm font-medium mb-1">نام فایل</label>
+        <input
+          type="text"
+          value={filename}
+          onChange={(e) => setFilename(e.target.value)}
+          className="w-full p-3 border border-gray-300 rounded-lg"
+        />
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium mb-1">محتوا</label>
+        <textarea
+          value={content}
+          onChange={(e) => setContent(e.target.value)}
+          rows={10}
+          className="w-full p-3 border border-gray-300 rounded-lg font-mono text-sm"
+          placeholder="محتوای فایل را اینجا بنویسید..."
+        />
+      </div>
+
+      <button
+        onClick={handleSave}
+        disabled={saving || !content.trim()}
+        className="w-full bg-green-600 text-white px-6 py-3 rounded-lg 
+                   hover:bg-green-700 disabled:opacity-50 transition-colors font-medium
+                   flex items-center justify-center gap-2"
+      >
+        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} 
+                d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
+        </svg>
+        {saving ? 'در حال ذخیره...' : 'ذخیره فایل'}
+      </button>
+
+      {error && (
+        <div role="alert" className="p-3 bg-red-50 border border-red-200 rounded-lg">
+          <p className="text-sm text-red-800">{error}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+---
+
+## 📂 بخش سوم: انتخاب پوشه
+
+### ۵. هوک انتخاب پوشه
+
+```jsx
+// hooks/useDirectoryPicker.js
+import { useState, useCallback } from 'react';
+
+export function useDirectoryPicker() {
+  const [isSupported, setIsSupported] = useState(false);
+  const [directoryHandle, setDirectoryHandle] = useState(null);
+  const [files, setFiles] = useState([]);
+  const [error, setError] = useState(null);
+
+  useState(() => {
+    setIsSupported('showDirectoryPicker' in window);
+  }, []);
+
+  // ✅ انتخاب پوشه
+  const pickDirectory = useCallback(async () => {
+    if (!isSupported) {
+      setError('File System Access API پشتیبانی نمیشه');
+      return null;
+    }
+
+    try {
+      setError(null);
+
+      const dirHandle = await window.showDirectoryPicker({
+        mode: 'readwrite',
+      });
+
+      setDirectoryHandle(dirHandle);
+
+      // ✅ خواندن فایل‌های پوشه
+      const fileList = [];
+      for await (const entry of dirHandle.values()) {
+        if (entry.kind === 'file') {
+          const file = await entry.getFile();
+          fileList.push({
+            name: entry.name,
+            handle: entry,
+            size: file.size,
+            type: file.type,
+          });
+        }
+      }
+
+      setFiles(fileList);
+      console.log(`✅ Directory selected: ${dirHandle.name} (${fileList.length} files)`);
+      return dirHandle;
+    } catch (err) {
+      if (err.name === 'AbortError') {
+        return null;
+      }
+      setError(err.message);
+      console.error('Failed to pick directory:', err);
+      return null;
+    }
+  }, [isSupported]);
+
+  // ✅ خواندن فایل از پوشه
+  const readFile = useCallback(async (fileHandle) => {
+    try {
+      const file = await fileHandle.getFile();
+      const content = await file.text();
+      return content;
+    } catch (err) {
+      console.error('Failed to read file:', err);
+      return null;
+    }
+  }, []);
+
+  // ✅ نوشتن فایل در پوشه
+  const writeFile = useCallback(async (filename, content) => {
+    if (!directoryHandle) {
+      setError('پوشه‌ای انتخاب نشده');
+      return false;
+    }
+
+    try {
+      const fileHandle = await directoryHandle.getFileHandle(filename, { create: true });
+      const writable = await fileHandle.createWritable();
+      await writable.write(content);
+      await writable.close();
+
+      console.log(`✅ File written: ${filename}`);
+      return true;
+    } catch (err) {
+      setError(err.message);
+      console.error('Failed to write file:', err);
+      return false;
+    }
+  }, [directoryHandle]);
+
+  return {
+    isSupported,
+    directoryHandle,
+    files,
+    error,
+    pickDirectory,
+    readFile,
+    writeFile,
+  };
+}
+```
+
+### ۶. کامپوننت مدیریت پوشه
+
+```jsx
+// components/DirectoryManager.jsx
+import { useState } from 'react';
+import { useDirectoryPicker } from '@/hooks/useDirectoryPicker';
+
+export function DirectoryManager() {
+  const { isSupported, directoryHandle, files, error, pickDirectory, readFile, writeFile } = 
+    useDirectoryPicker();
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [fileContent, setFileContent] = useState('');
+
+  const handlePickDirectory = async () => {
+    await pickDirectory();
+  };
+
+  const handleFileClick = async (file) => {
+    const content = await readFile(file.handle);
+    setSelectedFile(file);
+    setFileContent(content || '');
+  };
+
+  const handleSaveFile = async () => {
+    if (!selectedFile) return;
+    
+    const success = await writeFile(selectedFile.name, fileContent);
+    if (success) {
+      alert('✅ فایل ذخیره شد');
+    }
+  };
+
+  if (!isSupported) {
+    return (
+      <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+        <p className="text-sm text-yellow-800">
+          ⚠️ File System Access API پشتیبانی نمیشه.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <button
+        onClick={handlePickDirectory}
+        className="w-full bg-purple-600 text-white px-6 py-3 rounded-lg 
+                   hover:bg-purple-700 transition-colors font-medium"
+      >
+        📂 انتخاب پوشه
+      </button>
+
+      {directoryHandle && (
+        <div className="grid grid-cols-2 gap-4">
+          {/* ✅ لیست فایل‌ها */}
+          <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
+            <h3 className="font-bold mb-3">
+              📁 {directoryHandle.name} ({files.length} فایل)
+            </h3>
+            <ul className="space-y-1 max-h-96 overflow-y-auto">
+              {files.map((file, idx) => (
+                <li
+                  key={idx}
+                  onClick={() => handleFileClick(file)}
+                  className={`p-2 rounded cursor-pointer hover:bg-gray-200 text-sm ${
+                    selectedFile?.name === file.name ? 'bg-blue-100' : ''
+                  }`}
+                >
+                  📄 {file.name}
+                  <span className="text-xs text-gray-500 ml-2">
+                    ({(file.size / 1024).toFixed(1)} KB)
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          {/* ✅ ویرایشگر فایل */}
+          {selectedFile && (
+            <div className="bg-white border border-gray-200 rounded-lg p-4 space-y-3">
+              <h3 className="font-bold">
+                ✏️ ویرایش: {selectedFile.name}
+              </h3>
+              <textarea
+                value={fileContent}
+                onChange={(e) => setFileContent(e.target.value)}
+                rows={15}
+                className="w-full p-3 border border-gray-300 rounded-lg font-mono text-sm"
+              />
+              <button
+                onClick={handleSaveFile}
+                className="w-full bg-green-600 text-white px-4 py-2 rounded-lg 
+                           hover:bg-green-700 transition-colors font-medium"
+              >
+                💾 ذخیره
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {error && (
+        <div role="alert" className="p-3 bg-red-50 border border-red-200 rounded-lg">
+          <p className="text-sm text-red-800">{error}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+---
+
+## 🎨 بخش چهارم: مثال عملی - ادیتور تصویر
+
+### ۷. ادیتور تصویر با File System Access
+
+```jsx
+// components/ImageEditor.jsx
+import { useState, useRef } from 'react';
+import { useFileSystemAccess } from '@/hooks/useFileSystemAccess';
+import { useFileSaver } from '@/hooks/useFileSaver';
+
+export function ImageEditor() {
+  const { openFile } = useFileSystemAccess();
+  const { saveFile } = useFileSaver();
+  const canvasRef = useRef(null);
+  const [imageLoaded, setImageLoaded] = useState(false);
+  const [brightness, setBrightness] = useState(100);
+  const [contrast, setContrast] = useState(100);
+
+  const handleOpenImage = async () => {
+    const result = await openFile(['png', 'jpg', 'jpeg', 'webp']);
+    
+    if (result) {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = canvasRef.current;
+        const ctx = canvas.getContext('2d');
+        canvas.width = img.width;
+        canvas.height = img.height;
+        ctx.drawImage(img, 0, 0);
+        setImageLoaded(true);
+      };
+      img.src = URL.createObjectURL(result.file);
+    }
+  };
+
+  const applyFilters = () => {
+    if (!imageLoaded) return;
+
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
+    
+    // ✅ اعمال فیلترها
+    ctx.filter = `brightness(${brightness}%) contrast(${contrast}%)`;
+    
+    // ✅ redraw image (نیاز به نگهداری reference به تصویر اصلی)
+    // این یه مثال ساده هست
+  };
+
+  const handleSave = async () => {
+    if (!imageLoaded) return;
+
+    const canvas = canvasRef.current;
+    canvas.toBlob(async (blob) => {
+      const content = await blob.text();
+      await saveFile(content, 'edited-image.png', ['png']);
+    }, 'image/png');
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex gap-2">
+        <button
+          onClick={handleOpenImage}
+          className="flex-1 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700"
+        >
+          📂 باز کردن تصویر
+        </button>
+        <button
+          onClick={handleSave}
+          disabled={!imageLoaded}
+          className="flex-1 bg-green-600 text-white px-4 py-2 rounded-lg 
+                     hover:bg-green-700 disabled:opacity-50"
+        >
+          💾 ذخیره تصویر
+        </button>
+      </div>
+
+      <canvas
+        ref={canvasRef}
+        className="w-full border border-gray-300 rounded-lg"
+      />
+
+      {imageLoaded && (
+        <div className="space-y-3">
+          <div>
+            <label className="block text-sm font-medium mb-1">
+              روشنایی: {brightness}%
+            </label>
+            <input
+              type="range"
+              min="0"
+              max="200"
+              value={brightness}
+              onChange={(e) => setBrightness(Number(e.target.value))}
+              className="w-full"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium mb-1">
+              کنتراست: {contrast}%
+            </label>
+            <input
+              type="range"
+              min="0"
+              max="200"
+              value={contrast}
+              onChange={(e) => setContrast(Number(e.target.value))}
+              className="w-full"
+            />
+          </div>
+
+          <button
+            onClick={applyFilters}
+            className="w-full bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700"
+          >
+            اعمال فیلترها
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+---
+
+## 🔄 بخش پنجم: Fallback برای مرورگرهای بدون پشتیبانی
+
+### ۸. Fallback با Input File
+
+```jsx
+// components/FileAccessWithFallback.jsx
+import { useState, useRef } from 'react';
+import { useFileSystemAccess } from '@/hooks/useFileSystemAccess';
+
+export function FileAccessWithFallback() {
+  const { isSupported, openFile } = useFileSystemAccess();
+  const [content, setContent] = useState('');
+  const fileInputRef = useRef(null);
+
+  // ✅ روش ۱: File System Access API
+  const handleOpenWithAPI = async () => {
+    const result = await openFile(['txt', 'md']);
+    if (result) {
+      setContent(result.content);
+    }
+  };
+
+  // ✅ روش ۲: Fallback با input file
+  const handleOpenWithInput = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFileChange = async (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      const content = await file.text();
+      setContent(content);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      {isSupported ? (
+        <button
+          onClick={handleOpenWithAPI}
+          className="w-full bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700"
+        >
+          📂 باز کردن فایل (File System Access)
+        </button>
+      ) : (
+        <>
+          <button
+            onClick={handleOpenWithInput}
+            className="w-full bg-gray-600 text-white px-6 py-3 rounded-lg hover:bg-gray-700"
+          >
+            📂 باز کردن فایل (Fallback)
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".txt,.md"
+            onChange={handleFileChange}
+            className="hidden"
+          />
+          <p className="text-xs text-gray-500 text-center">
+            💡 File System Access API پشتیبانی نمیشه. از روش سنتی استفاده می‌کنیم.
+          </p>
+        </>
+      )}
+
+      {content && (
+        <div className="p-4 bg-gray-50 rounded-lg">
+          <p className="text-sm font-medium mb-2">محتوای فایل:</p>
+          <pre className="text-xs overflow-auto max-h-64">{content}</pre>
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+---
+
+**🔗 ابزار تست**
+
+- **Chrome DevTools** → Application → File System (مشاهده فایل‌های دسترسی‌داده‌شده).
+- **Console**: `window.showOpenFilePicker` برای بررسی پشتیبانی.
+- **تست واقعی**: روی Chrome یا Edge دسکتاپ تست کن.
+- **Safari/Firefox**: تست کن که fallback درست کار می‌کنه.
+- **Permission**: بعد از باز کردن فایل، DevTools → Application → Permissions رو چک کن.
+
+**⚠️ چک‌لیست نهایی**
+
+- [ ] بررسی `showOpenFilePicker` قبل از استفاده؟
+- [ ] استفاده فقط در user gesture (کلیک)؟
+- [ ] `verifyPermission()` قبل از نوشتن؟
+- [ ] مدیریت `AbortError` (cancel توسط کاربر)؟
+- [ ] Fallback برای مرورگرهای بدون پشتیبانی؟
+- [ ] استفاده از `types` برای محدود کردن فرمت فایل؟
+- [ ] `multiple: true` برای انتخاب چند فایل؟
+- [ ] cleanup بعد از اتمام کار؟
+- [ ] تست در Chrome واقعی؟
+- [ ] تست در Safari/Firefox (fallback)؟
+
+> **قانون ۳ ثانیه‌ای:** Console رو باز کن و بنویس `'showOpenFilePicker' in window`. اگه `true` بود، یعنی پشتیبانی میشه. بعد یه دکمه بزن و `showOpenFilePicker()` رو صدا بزن. آیا پنجره انتخاب فایل باز میشه؟ بعد Safari رو تست کن؛ باید `false` برگردونه و fallback کار کنه. اگه نه، یعنی API رو درست پیاده‌سازی نکردی!
