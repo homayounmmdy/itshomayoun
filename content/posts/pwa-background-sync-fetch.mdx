@@ -1,0 +1,1530 @@
+---
+title: "PWA: Push Notifications و Notification API (سیستم اعلان کامل)"
+date: '2026-10-01'
+playlist: 'PWA - برنامه وب پیشرونده'
+tags: ['PWA', 'Push-Notifications', 'Notification-API', 'Notification-Actions', 'Service-Worker', 'React', 'Web-Push']
+description: "چطور سیستم اعلان کامل با Push Notifications، Notification API و Notification Actions بسازیم - از درخواست مجوز تا نمایش اعلان با دکمه‌های تعاملی."
+enableComment: true
+---
+
+# 🔔 PWA: Push Notifications و Notification API (سیستم اعلان کامل)
+
+**💡 مفهوم کلیدی**  
+سه API مرتبط برای سیستم اعلان کامل:
+- **Notification API**: نمایش اعلان محلی (وقتی اپ بازه)
+- **Push Notifications**: دریافت اعلان از سرور (حتی وقتی اپ بسته‌ست)
+- **Notification Actions**: دکمه‌های تعاملی داخل اعلان (مثل "پاسخ"، "بایگانی"، "حذف")
+
+این یعنی PWA شما می‌تونه مثل اپ‌های بومی (WhatsApp، Telegram) اعلان بفرسته، دکمه‌های تعاملی داشته باشه و حتی وقتی کاربر اپ رو نبسته، واکنش نشون بده.
+
+**⚠️ دام رایج**
+
+**Notification API:**
+- فراموش کردن `Notification.requestPermission()` (بدون مجوز کار نمی‌کنه!).
+- عدم بررسی `Notification.permission` قبل از نمایش.
+- استفاده بدون user gesture (بعضی مرورگرها بلاک می‌کنن!).
+- عدم ارائه‌ی راه غیرفعال‌سازی به کاربر.
+
+**Push Notifications:**
+- فراموش کردن VAPID keys (بدون اون سرور نمی‌تونه push بفرسته!).
+- عدم مدیریت `push` event در Service Worker.
+- عدم ذخیره subscription در سرور.
+- فراموش کردن HTTPS (Push فقط روی HTTPS کار می‌کنه!).
+
+**Notification Actions:**
+- فراموش کردن `actions` در options.
+- عدم مدیریت `notificationclick` event در Service Worker.
+- عدم استفاده از `tag` برای جلوگیری از اعلان‌های تکراری.
+
+**📏 وضعیت پشتیبانی مرورگرها**
+
+| قابلیت                  | Chrome | Edge | Firefox | Safari | iOS Safari |
+|-------------------------|--------|------|---------|--------|------------|
+| Notification API        | ✅     | ✅   | ✅      | ✅     | ✅ (16.4+) |
+| Push Notifications      | ✅     | ✅   | ✅      | ❌     | ✅ (16.4+) |
+| Notification Actions    | ✅     | ✅   | ✅      | ❌     | ❌         |
+
+> ⚠️ **نکته حیاتی**: iOS 16.4+ از Push Notifications پشتیبانی می‌کنه، ولی فقط وقتی PWA به هوم اسکرین اضافه شده باشه.
+
+---
+
+## 🔐 بخش اول: مدیریت مجوزها
+
+### ۱. هوک مدیریت Permission
+
+```jsx
+// hooks/useNotificationPermission.js
+import { useState, useEffect, useCallback } from 'react';
+
+export function useNotificationPermission() {
+  const [permission, setPermission] = useState('default'); // default | granted | denied
+  const [isSupported, setIsSupported] = useState(false);
+
+  useEffect(() => {
+    setIsSupported('Notification' in window);
+    
+    if ('Notification' in window) {
+      setPermission(Notification.permission);
+    }
+  }, []);
+
+  // ✅ درخواست مجوز
+  const requestPermission = useCallback(async () => {
+    if (!isSupported) {
+      console.warn('Notification API not supported');
+      return false;
+    }
+
+    try {
+      const result = await Notification.requestPermission();
+      setPermission(result);
+      return result === 'granted';
+    } catch (error) {
+      console.error('Failed to request permission:', error);
+      return false;
+    }
+  }, [isSupported]);
+
+  return {
+    isSupported,
+    permission,
+    requestPermission,
+    isGranted: permission === 'granted',
+    isDenied: permission === 'denied',
+  };
+}
+```
+
+### ۲. کامپوننت درخواست مجوز
+
+```jsx
+// components/NotificationPermission.jsx
+import { useNotificationPermission } from '@/hooks/useNotificationPermission';
+
+export function NotificationPermission() {
+  const { isSupported, permission, requestPermission, isGranted, isDenied } = useNotificationPermission();
+
+  if (!isSupported) {
+    return (
+      <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+        <p className="text-sm text-yellow-800">
+          ⚠️ اعلان‌ها در این مرورگر پشتیبانی نمیشن.
+        </p>
+      </div>
+    );
+  }
+
+  if (isGranted) {
+    return (
+      <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
+        <p className="text-sm text-green-800">
+          ✅ اعلان‌ها فعال هستن
+        </p>
+      </div>
+    );
+  }
+
+  if (isDenied) {
+    return (
+      <div className="p-4 bg-red-50 border border-red-200 rounded-lg">
+        <p className="text-sm text-red-800 mb-2">
+          ❌ اعلان‌ها غیرفعال هستن
+        </p>
+        <p className="text-xs text-red-700">
+          برای فعال‌سازی، به تنظیمات مرورگر برید و مجوز اعلان رو بدید.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="p-6 bg-blue-50 border border-blue-200 rounded-lg space-y-4">
+      <h3 className="font-bold text-lg text-blue-900">
+        🔔 فعال‌سازی اعلان‌ها
+      </h3>
+      <p className="text-sm text-blue-800">
+        برای دریافت اعلان‌های مهم (مثل پیام‌های جدید، تخفیف‌ها و سفارش‌ها)، مجوز اعلان رو فعال کن.
+      </p>
+      <button
+        onClick={requestPermission}
+        className="w-full bg-blue-600 text-white px-6 py-3 rounded-lg 
+                   hover:bg-blue-700 transition-colors font-medium"
+      >
+        فعال‌سازی اعلان‌ها
+      </button>
+    </div>
+  );
+}
+```
+
+---
+
+## 📢 بخش دوم: Notification API (اعلان محلی)
+
+### ۳. هوک نمایش اعلان محلی
+
+```jsx
+// hooks/useLocalNotification.js
+import { useCallback } from 'react';
+import { useNotificationPermission } from './useNotificationPermission';
+
+export function useLocalNotification() {
+  const { isGranted, requestPermission } = useNotificationPermission();
+
+  // ✅ نمایش اعلان محلی
+  const showNotification = useCallback(async (title, options = {}) => {
+    // ✅ بررسی مجوز
+    if (!isGranted) {
+      const granted = await requestPermission();
+      if (!granted) {
+        console.warn('Notification permission denied');
+        return false;
+      }
+    }
+
+    try {
+      const notification = new Notification(title, {
+        body: options.body || '',
+        icon: options.icon || '/icons/icon-192.png',
+        badge: options.badge || '/icons/badge-72.png',
+        tag: options.tag || `notification-${Date.now()}`,
+        requireInteraction: options.requireInteraction || false,
+        silent: options.silent || false,
+        vibrate: options.vibrate || [200, 100, 200],
+        data: options.data || {},
+        ...options,
+      });
+
+      // ✅ کلیک روی اعلان
+      notification.onclick = (event) => {
+        event.preventDefault();
+        window.focus();
+        notification.close();
+
+        // ✅ ناوبری به صفحه مناسب
+        if (options.data?.url) {
+          window.location.href = options.data.url;
+        }
+      };
+
+      // ✅ بستن خودکار بعد از ۵ ثانیه (اگه requireInteraction فعال نباشه)
+      if (!options.requireInteraction) {
+        setTimeout(() => notification.close(), 5000);
+      }
+
+      return true;
+    } catch (error) {
+      console.error('Failed to show notification:', error);
+      return false;
+    }
+  }, [isGranted, requestPermission]);
+
+  return { showNotification };
+}
+
+// ✅ استفاده:
+function LocalNotificationExample() {
+  const { showNotification } = useLocalNotification();
+
+  const handleShow = async () => {
+    await showNotification('پیام جدید', {
+      body: 'شما یک پیام جدید از علی دارید',
+      icon: '/icons/icon-192.png',
+      badge: '/icons/badge-72.png',
+      tag: 'message',
+      data: { url: '/messages' },
+      vibrate: [200, 100, 200],
+    });
+  };
+
+  return (
+    <button onClick={handleShow} className="bg-blue-600 text-white px-4 py-2 rounded">
+      نمایش اعلان تست
+    </button>
+  );
+}
+```
+
+---
+
+## 📡 بخش سوم: Push Notifications (اعلان از سرور)
+
+### ۴. هوک مدیریت Push Subscription
+
+```jsx
+// hooks/usePushSubscription.js
+import { useState, useEffect, useCallback } from 'react';
+import { useNotificationPermission } from './useNotificationPermission';
+
+// ✅ VAPID public key (از سرور بگیر)
+const VAPID_PUBLIC_KEY = 'YOUR_VAPID_PUBLIC_KEY';
+
+export function usePushSubscription() {
+  const { isGranted, requestPermission } = useNotificationPermission();
+  const [subscription, setSubscription] = useState(null);
+  const [isSubscribed, setIsSubscribed] = useState(false);
+
+  // ✅ تبدیل VAPID key به Uint8Array
+  const urlBase64ToUint8Array = (base64String) => {
+    const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+    const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+    const rawData = window.atob(base64);
+    const outputArray = new Uint8Array(rawData.length);
+    for (let i = 0; i < rawData.length; ++i) {
+      outputArray[i] = rawData.charCodeAt(i);
+    }
+    return outputArray;
+  };
+
+  // ✅ ثبت subscription
+  const subscribe = useCallback(async () => {
+    if (!isGranted) {
+      const granted = await requestPermission();
+      if (!granted) return null;
+    }
+
+    try {
+      const registration = await navigator.serviceWorker.ready;
+      
+      // ✅ بررسی subscription قبلی
+      let sub = await registration.pushManager.getSubscription();
+      
+      if (!sub) {
+        // ✅ ساخت subscription جدید
+        sub = await registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
+        });
+      }
+
+      setSubscription(sub);
+      setIsSubscribed(true);
+
+      // ✅ ارسال subscription به سرور
+      await fetch('/api/push/subscribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(sub),
+      });
+
+      console.log('✅ Subscribed to push notifications');
+      return sub;
+    } catch (error) {
+      console.error('Failed to subscribe:', error);
+      return null;
+    }
+  }, [isGranted, requestPermission]);
+
+  // ✅ لغو subscription
+  const unsubscribe = useCallback(async () => {
+    if (!subscription) return false;
+
+    try {
+      await subscription.unsubscribe();
+      
+      // ✅ اطلاع به سرور
+      await fetch('/api/push/unsubscribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ endpoint: subscription.endpoint }),
+      });
+
+      setSubscription(null);
+      setIsSubscribed(false);
+      console.log('✅ Unsubscribed from push notifications');
+      return true;
+    } catch (error) {
+      console.error('Failed to unsubscribe:', error);
+      return false;
+    }
+  }, [subscription]);
+
+  // ✅ بررسی subscription هنگام لود
+  useEffect(() => {
+    const checkSubscription = async () => {
+      if (!isGranted) return;
+
+      const registration = await navigator.serviceWorker.ready;
+      const sub = await registration.pushManager.getSubscription();
+      
+      if (sub) {
+        setSubscription(sub);
+        setIsSubscribed(true);
+      }
+    };
+
+    checkSubscription();
+  }, [isGranted]);
+
+  return {
+    subscription,
+    isSubscribed,
+    subscribe,
+    unsubscribe,
+  };
+}
+```
+
+### ۵. کامپوننت مدیریت Push
+
+```jsx
+// components/PushNotificationManager.jsx
+import { usePushSubscription } from '@/hooks/usePushSubscription';
+
+export function PushNotificationManager() {
+  const { isSubscribed, subscribe, unsubscribe } = usePushSubscription();
+
+  return (
+    <div className="p-6 bg-white border border-gray-200 rounded-lg space-y-4">
+      <h3 className="font-bold text-lg">📡 اعلان‌های Push</h3>
+      
+      {isSubscribed ? (
+        <>
+          <p className="text-sm text-green-600">
+            ✅ شما اعلان‌های push رو دریافت می‌کنید
+          </p>
+          <button
+            onClick={unsubscribe}
+            className="w-full bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700"
+          >
+            غیرفعال‌سازی اعلان‌ها
+          </button>
+        </>
+      ) : (
+        <>
+          <p className="text-sm text-gray-600">
+            برای دریافت اعلان‌های مهم (مثل پیام‌ها، تخفیف‌ها و سفارش‌ها)، اعلان‌های push رو فعال کن.
+          </p>
+          <button
+            onClick={subscribe}
+            className="w-full bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700"
+          >
+            فعال‌سازی اعلان‌های push
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+```
+
+### ۶. Service Worker برای Push
+
+```js
+// public/sw.js
+
+// ✅ دریافت push notification
+self.addEventListener('push', (event) => {
+  if (!event.data) return;
+
+  const data = event.data.json();
+
+  const options = {
+    body: data.body || '',
+    icon: data.icon || '/icons/icon-192.png',
+    badge: data.badge || '/icons/badge-72.png',
+    tag: data.tag || `push-${Date.now()}`,
+    requireInteraction: data.requireInteraction || false,
+    silent: data.silent || false,
+    vibrate: data.vibrate || [200, 100, 200],
+    data: data.data || {},
+    
+    // ✅ Notification Actions
+    actions: data.actions || [
+      {
+        action: 'open',
+        title: 'باز کردن',
+        icon: '/icons/action-open.png',
+      },
+      {
+        action: 'dismiss',
+        title: 'بستن',
+        icon: '/icons/action-dismiss.png',
+      },
+    ],
+  };
+
+  event.waitUntil(
+    self.registration.showNotification(data.title || 'اعلان جدید', options)
+  );
+});
+
+// ✅ کلیک روی اعلان
+self.addEventListener('notificationclick', (event) => {
+  const notification = event.notification;
+  const action = event.action;
+  const data = notification.data;
+
+  notification.close();
+
+  event.waitUntil(
+    (async () => {
+      // ✅ مدیریت action‌های مختلف
+      if (action === 'dismiss') {
+        // ✅ فقط بستن اعلان
+        return;
+      }
+
+      if (action === 'reply') {
+        // ✅ باز کردن صفحه پاسخ
+        const url = data.replyUrl || '/messages';
+        await openWindow(url);
+        return;
+      }
+
+      if (action === 'archive') {
+        // ✅ بایگانی کردن
+        await fetch('/api/messages/archive', {
+          method: 'POST',
+          body: JSON.stringify({ messageId: data.messageId }),
+        });
+        return;
+      }
+
+      // ✅ action پیش‌فرض: باز کردن صفحه
+      const url = data.url || '/';
+      await openWindow(url);
+    })()
+  );
+});
+
+// ✅ باز کردن یا focus کردن window
+async function openWindow(url) {
+  const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+  
+  // ✅ اگه window بازه، focus کن
+  for (const client of clients) {
+    if (client.url === self.location.origin + url) {
+      return client.focus();
+    }
+  }
+
+  // ✅ اگه باز نیست، باز کن
+  return self.clients.openWindow(url);
+}
+
+// ✅ بستن اعلان
+self.addEventListener('notificationclose', (event) => {
+  const notification = event.notification;
+  const data = notification.data;
+
+  // ✅ ارسال analytics
+  console.log('Notification closed:', data);
+});
+```
+
+---
+
+## 🎯 بخش چهارم: Notification Actions (دکمه‌های تعاملی)
+
+### ۷. ارسال Push با Actions از سرور
+
+```js
+// server/send-push.js (Node.js مثال)
+const webpush = require('web-push');
+
+// ✅ VAPID keys
+webpush.setVapidDetails(
+  'mailto:your-email@example.com',
+  process.env.VAPID_PUBLIC_KEY,
+  process.env.VAPID_PRIVATE_KEY
+);
+
+// ✅ ارسال push با actions
+async function sendPushNotification(subscription, data) {
+  const payload = {
+    title: data.title,
+    body: data.body,
+    icon: '/icons/icon-192.png',
+    badge: '/icons/badge-72.png',
+    tag: data.tag,
+    data: {
+      url: data.url,
+      messageId: data.messageId,
+    },
+    
+    // ✅ Notification Actions
+    actions: [
+      {
+        action: 'reply',
+        title: 'پاسخ',
+        icon: '/icons/action-reply.png',
+      },
+      {
+        action: 'archive',
+        title: 'بایگانی',
+        icon: '/icons/action-archive.png',
+      },
+      {
+        action: 'dismiss',
+        title: 'بستن',
+        icon: '/icons/action-dismiss.png',
+      },
+    ],
+    
+    requireInteraction: true, // ✅ اعلان خودکار بسته نمیشه
+    vibrate: [200, 100, 200],
+  };
+
+  try {
+    await webpush.sendNotification(subscription, JSON.stringify(payload));
+    console.log('✅ Push sent successfully');
+  } catch (error) {
+    console.error('Failed to send push:', error);
+  }
+}
+
+// ✅ استفاده:
+sendPushNotification(subscription, {
+  title: 'پیام جدید از علی',
+  body: 'سلام! خوبی؟',
+  tag: 'message-123',
+  url: '/messages/123',
+  messageId: '123',
+});
+```
+
+### ۸. کامپوننت تست Push با Actions
+
+```jsx
+// components/TestPushWithActions.jsx
+import { useState } from 'react';
+
+export function TestPushWithActions() {
+  const [sending, setSending] = useState(false);
+
+  const handleSend = async () => {
+    setSending(true);
+
+    try {
+      const response = await fetch('/api/push/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: 'پیام جدید',
+          body: 'شما یک پیام جدید دارید',
+          tag: 'test-message',
+          actions: [
+            { action: 'reply', title: 'پاسخ' },
+            { action: 'archive', title: 'بایگانی' },
+            { action: 'dismiss', title: 'بستن' },
+          ],
+        }),
+      });
+
+      if (response.ok) {
+        alert('✅ Push notification sent!');
+      } else {
+        alert('❌ Failed to send push');
+      }
+    } catch (error) {
+      alert('❌ Error: ' + error.message);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <button
+      onClick={handleSend}
+      disabled={sending}
+      className="bg-purple-600 text-white px-6 py-3 rounded-lg hover:bg-purple-700 disabled:opacity-50"
+    >
+      {sending ? 'در حال ارسال...' : 'ارسال Push با Actions'}
+    </button>
+  );
+}
+```
+
+---
+
+## 🎨 بخش پنجم: ترکیب همه با هم
+
+### ۹. سیستم اعلان کامل
+
+```jsx
+// components/CompleteNotificationSystem.jsx
+import { useState } from 'react';
+import { useNotificationPermission } from '@/hooks/useNotificationPermission';
+import { useLocalNotification } from '@/hooks/useLocalNotification';
+import { usePushSubscription } from '@/hooks/usePushSubscription';
+
+export function CompleteNotificationSystem() {
+  const { isGranted, permission } = useNotificationPermission();
+  const { showNotification } = useLocalNotification();
+  const { isSubscribed, subscribe, unsubscribe } = usePushSubscription();
+  const [message, setMessage] = useState('');
+
+  const handleShowLocal = async () => {
+    await showNotification('پیام محلی', {
+      body: message || 'این یه اعلان محلی هست',
+      tag: 'local-test',
+      data: { url: '/messages' },
+    });
+  };
+
+  return (
+    <div className="max-w-2xl mx-auto p-6 bg-white rounded-xl shadow-lg space-y-6">
+      <h2 className="text-2xl font-bold">🔔 سیستم اعلان کامل</h2>
+
+      {/* ✅ وضعیت مجوز */}
+      <div className="p-4 bg-gray-50 rounded-lg">
+        <p className="text-sm font-medium">وضعیت مجوز: {permission}</p>
+        <p className="text-sm font-medium">Push Subscription: {isSubscribed ? '✅' : '❌'}</p>
+      </div>
+
+      {/* ✅ اعلان محلی */}
+      <div className="space-y-3">
+        <h3 className="font-bold">📢 اعلان محلی</h3>
+        <input
+          type="text"
+          value={message}
+          onChange={(e) => setMessage(e.target.value)}
+          placeholder="متن اعلان"
+          className="w-full p-3 border border-gray-300 rounded-lg"
+        />
+        <button
+          onClick={handleShowLocal}
+          disabled={!isGranted}
+          className="w-full bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-50"
+        >
+          نمایش اعلان محلی
+        </button>
+      </div>
+
+      {/* ✅ Push Notifications */}
+      <div className="space-y-3">
+        <h3 className="font-bold">📡 اعلان‌های Push</h3>
+        {isSubscribed ? (
+          <button
+            onClick={unsubscribe}
+            className="w-full bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700"
+          >
+            غیرفعال‌سازی Push
+          </button>
+        ) : (
+          <button
+            onClick={subscribe}
+            className="w-full bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700"
+          >
+            فعال‌سازی Push
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+```
+
+---
+
+**🔗 ابزار تست**
+
+- **Chrome DevTools** → Application → Notifications (مشاهده اعلان‌ها).
+- **DevTools** → Application → Push Messaging (تست push).
+- **DevTools** → Application → Service Workers → "Push" برای ارسال push تستی.
+- **Console**: `Notification.requestPermission()` برای تست مجوز.
+- **web-push-testing-service**: [servicewor
+
+### USER
+یکی هم برای background compatibility 
+
+- **Background Sync**: sync کردن داده‌ها وقتی شبکه برمی‌گرده
+- **Periodic Background Sync**: اجراهای دوره‌ای در پس‌زمینه
+- **Background Fetch**: دانلود فایل‌های بزرگ در پس‌زمینه
+- **Service Worker Lifecycle Events**: `install`, `activate`, `fetch`, `push`, `sync`
+
+### ASSISTANT
+```mdx
+---
+title: "PWA: Background Sync و پردازش در پس‌زمینه"
+date: '2026-09-29'
+playlist: 'PWA - برنامه وب پیشرونده'
+tags: ['PWA', 'Background-Sync', 'Periodic-Background-Sync', 'Background-Fetch', 'Service-Worker', 'Lifecycle', 'Offline', 'React']
+description: "چطور با Background Sync داده‌ها رو وقتی شبکه برمی‌گرده sync کنیم، با Periodic Background Sync اجراهای دوره‌ای داشته باشیم و با Background Fetch فایل‌های بزرگ رو در پس‌زمینه دانلود کنیم."
+enableComment: true
+---
+
+# 🔄 PWA: Background Sync و پردازش در پس‌زمینه
+
+**💡 مفهوم کلیدی**  
+چهار قابلیت کلیدی برای کار در پس‌زمینه:
+- **Background Sync**: sync کردن داده‌ها وقتی شبکه برمی‌گرده (مثل ارسال پیام‌های صف‌شده)
+- **Periodic Background Sync**: اجراهای دوره‌ای در پس‌زمینه (مثل بروزرسانی محتوا)
+- **Background Fetch**: دانلود فایل‌های بزرگ در پس‌زمینه (حتی وقتی اپ بسته‌ست)
+- **Service Worker Lifecycle Events**: مدیریت چرخه‌ی حیات SW
+
+این یعنی PWA شما می‌تونه مثل اپ‌های بومی کار کنه: حتی وقتی شبکه قطعه یا اپ بسته‌ست، کارها رو انجام بده.
+
+**⚠️ دام رایج**
+
+**Background Sync:**
+- فراموش کردن `registration.sync.register()` در user gesture.
+- عدم مدیریت `sync` event در Service Worker.
+- عدم بررسی `lastChance` (آخرین فرصت قبل از لغو).
+
+**Periodic Background Sync:**
+- فراموش کردن `periodicsync` event.
+- عدم تنظیم `minInterval` (حداقل فاصله بین اجراها).
+- نادیده گرفتن اینکه نیاز به Engagement Score داره.
+
+**Background Fetch:**
+- فراموش کردن `backgroundFetch.register()`.
+- عدم مدیریت `backgroundfetchsuccess` و `backgroundfetchfailure`.
+- عدم نمایش progress به کاربر.
+
+**📏 وضعیت پشتیبانی مرورگرها**
+
+| قابلیت                     | Chrome | Edge | Firefox | Safari | iOS Safari |
+|----------------------------|--------|------|---------|--------|------------|
+| Background Sync            | ✅     | ✅   | ❌      | ❌     | ❌         |
+| Periodic Background Sync   | ✅     | ✅   | ❌      | ❌     | ❌         |
+| Background Fetch           | ✅     | ✅   | ❌      | ❌     | ❌         |
+| SW Lifecycle Events        | ✅     | ✅   | ✅      | ✅     | ✅         |
+
+> ⚠️ **نکته حیاتی**: Background Sync و Periodic Sync فقط در مرورگرهای **Chromium-based** کار می‌کنن. iOS و Firefox پشتیبانی نمی‌کنن.
+
+---
+
+## 🔄 بخش اول: Background Sync (sync یکباره)
+
+### ۱. هوک ثبت Background Sync
+
+```jsx
+// hooks/useBackgroundSync.js
+import { useState, useCallback } from 'react';
+
+export function useBackgroundSync() {
+  const [isSupported, setIsSupported] = useState(false);
+  const [isRegistered, setIsRegistered] = useState(false);
+
+  useState(() => {
+    setIsSupported('serviceWorker' in navigator && 'SyncManager' in window);
+  }, []);
+
+  // ✅ ثبت sync task
+  const registerSync = useCallback(async (tag, data = {}) => {
+    if (!isSupported) {
+      console.warn('Background Sync not supported');
+      return false;
+    }
+
+    try {
+      const registration = await navigator.serviceWorker.ready;
+      
+      // ✅ ذخیره داده در IndexedDB (چون SW به DOM دسترسی نداره)
+      await saveToQueue(tag, data);
+      
+      // ✅ ثبت sync task
+      await registration.sync.register(tag);
+      setIsRegistered(true);
+      
+      console.log(`✅ Background sync registered: ${tag}`);
+      return true;
+    } catch (error) {
+      console.error('Failed to register sync:', error);
+      return false;
+    }
+  }, [isSupported]);
+
+  // ✅ ذخیره در IndexedDB
+  const saveToQueue = async (tag, data) => {
+    const db = await openDB('sync-queue', 1, {
+      upgrade(db) {
+        if (!db.objectStoreNames.contains('tasks')) {
+          db.createObjectStore('tasks', { keyPath: 'id', autoIncrement: true });
+        }
+      },
+    });
+
+    await db.add('tasks', {
+      tag,
+      data,
+      timestamp: Date.now(),
+    });
+  };
+
+  return { isSupported, isRegistered, registerSync };
+}
+```
+
+### ۲. Service Worker برای Background Sync
+
+```js
+// public/sw.js
+
+// ✅ مدیریت Background Sync
+self.addEventListener('sync', (event) => {
+  if (event.tag === 'sync-messages') {
+    event.waitUntil(syncMessages());
+  }
+
+  if (event.tag === 'sync-orders') {
+    event.waitUntil(syncOrders());
+  }
+});
+
+// ✅ sync پیام‌ها
+async function syncMessages() {
+  const db = await openDB('sync-queue', 1);
+  const tasks = await db.getAllFromIndex('tasks', 'by-tag', 'sync-messages');
+
+  for (const task of tasks) {
+    try {
+      // ✅ ارسال به سرور
+      const response = await fetch('/api/messages/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(task.data),
+      });
+
+      if (response.ok) {
+        // ✅ حذف از queue
+        await db.delete('tasks', task.id);
+        console.log(`✅ Message synced: ${task.id}`);
+      }
+    } catch (error) {
+      console.error(`Failed to sync message ${task.id}:`, error);
+      // ✅ اگر شبکه هنوز قطعه، task می‌مونه و دوباره تلاش می‌کنه
+    }
+  }
+}
+
+// ✅ sync سفارش‌ها
+async function syncOrders() {
+  const db = await openDB('sync-queue', 1);
+  const tasks = await db.getAllFromIndex('tasks', 'by-tag', 'sync-orders');
+
+  for (const task of tasks) {
+    try {
+      const response = await fetch('/api/orders/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(task.data),
+      });
+
+      if (response.ok) {
+        await db.delete('tasks', task.id);
+        console.log(`✅ Order synced: ${task.id}`);
+      }
+    } catch (error) {
+      console.error(`Failed to sync order ${task.id}:`, error);
+    }
+  }
+}
+```
+
+### ۳. کامپوننت ارسال پیام آفلاین
+
+```jsx
+// components/OfflineMessageSender.jsx
+import { useState } from 'react';
+import { useBackgroundSync } from '@/hooks/useBackgroundSync';
+
+export function OfflineMessageSender() {
+  const { isSupported, registerSync } = useBackgroundSync();
+  const [message, setMessage] = useState('');
+  const [sending, setSending] = useState(false);
+
+  const handleSend = async () => {
+    if (!message.trim()) return;
+
+    setSending(true);
+
+    const success = await registerSync('sync-messages', {
+      text: message,
+      timestamp: Date.now(),
+    });
+
+    if (success) {
+      setMessage('');
+      alert('✅ پیام در صف ارسال قرار گرفت. وقتی شبکه وصل شد، ارسال می‌شه.');
+    } else {
+      alert('❌ خطا در ثبت پیام');
+    }
+
+    setSending(false);
+  };
+
+  if (!isSupported) {
+    return (
+      <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+        <p className="text-sm text-yellow-800">
+          ⚠️ Background Sync در این مرورگر پشتیبانی نمیشه.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <textarea
+        value={message}
+        onChange={(e) => setMessage(e.target.value)}
+        placeholder="پیام خود را بنویسید..."
+        rows={3}
+        className="w-full p-3 border border-gray-300 rounded-lg"
+      />
+      <button
+        onClick={handleSend}
+        disabled={sending || !message.trim()}
+        className="w-full bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-50"
+      >
+        {sending ? 'در حال ثبت...' : 'ارسال پیام'}
+      </button>
+    </div>
+  );
+}
+```
+
+---
+
+## ⏰ بخش دوم: Periodic Background Sync (اجرای دوره‌ای)
+
+### ۴. هوک ثبت Periodic Sync
+
+```jsx
+// hooks/usePeriodicBackgroundSync.js
+import { useState, useCallback } from 'react';
+
+export function usePeriodicBackgroundSync() {
+  const [isSupported, setIsSupported] = useState(false);
+  const [isRegistered, setIsRegistered] = useState(false);
+
+  useState(() => {
+    setIsSupported(
+      'serviceWorker' in navigator && 
+      'periodicSync' in window.SyncManager.prototype
+    );
+  }, []);
+
+  // ✅ ثبت periodic sync
+  const registerPeriodicSync = useCallback(async (tag, minInterval = 3600000) => {
+    if (!isSupported) {
+      console.warn('Periodic Background Sync not supported');
+      return false;
+    }
+
+    try {
+      const registration = await navigator.serviceWorker.ready;
+      
+      // ✅ بررسی permission
+      const status = await navigator.permissions.query({
+        name: 'periodic-background-sync',
+      });
+
+      if (status.state !== 'granted') {
+        console.warn('Periodic background sync permission not granted');
+        return false;
+      }
+
+      // ✅ ثبت periodic sync
+      await registration.periodicSync.register(tag, {
+        minInterval: minInterval, // حداقل فاصله بین اجراها (میلی‌ثانیه)
+      });
+
+      setIsRegistered(true);
+      console.log(`✅ Periodic sync registered: ${tag} (every ${minInterval / 1000}s)`);
+      return true;
+    } catch (error) {
+      console.error('Failed to register periodic sync:', error);
+      return false;
+    }
+  }, [isSupported]);
+
+  // ✅ لغو periodic sync
+  const unregisterPeriodicSync = useCallback(async (tag) => {
+    try {
+      const registration = await navigator.serviceWorker.ready;
+      await registration.periodicSync.unregister(tag);
+      setIsRegistered(false);
+      console.log(`✅ Periodic sync unregistered: ${tag}`);
+      return true;
+    } catch (error) {
+      console.error('Failed to unregister periodic sync:', error);
+      return false;
+    }
+  }, []);
+
+  return { isSupported, isRegistered, registerPeriodicSync, unregisterPeriodicSync };
+}
+```
+
+### ۵. Service Worker برای Periodic Sync
+
+```js
+// public/sw.js
+
+// ✅ مدیریت Periodic Background Sync
+self.addEventListener('periodicsync', (event) => {
+  if (event.tag === 'update-content') {
+    event.waitUntil(updateContent());
+  }
+
+  if (event.tag === 'sync-analytics') {
+    event.waitUntil(syncAnalytics());
+  }
+});
+
+// ✅ بروزرسانی محتوا
+async function updateContent() {
+  try {
+    // ✅ دریافت داده‌های جدید از سرور
+    const response = await fetch('/api/content/latest');
+    
+    if (response.ok) {
+      const data = await response.json();
+      
+      // ✅ ذخیره در cache
+      const cache = await caches.open('content-v1');
+      await cache.put('/api/content/latest', new Response(JSON.stringify(data)));
+      
+      console.log('✅ Content updated in background');
+    }
+  } catch (error) {
+    console.error('Failed to update content:', error);
+  }
+}
+
+// ✅ sync analytics
+async function syncAnalytics() {
+  const db = await openDB('analytics-queue', 1);
+  const events = await db.getAll('events');
+
+  if (events.length === 0) return;
+
+  try {
+    const response = await fetch('/api/analytics/batch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ events }),
+    });
+
+    if (response.ok) {
+      await db.clear('events');
+      console.log(`✅ Synced ${events.length} analytics events`);
+    }
+  } catch (error) {
+    console.error('Failed to sync analytics:', error);
+  }
+}
+```
+
+### ۶. کامپوننت مدیریت Periodic Sync
+
+```jsx
+// components/PeriodicSyncManager.jsx
+import { useEffect } from 'react';
+import { usePeriodicBackgroundSync } from '@/hooks/usePeriodicBackgroundSync';
+
+export function PeriodicSyncManager() {
+  const { isSupported, isRegistered, registerPeriodicSync, unregisterPeriodicSync } = 
+    usePeriodicBackgroundSync();
+
+  useEffect(() => {
+    if (isSupported && !isRegistered) {
+      // ✅ ثبت periodic sync برای بروزرسانی محتوا هر ۱ ساعت
+      registerPeriodicSync('update-content', 3600000); // 1 hour
+      
+      // ✅ ثبت periodic sync برای sync analytics هر ۳۰ دقیقه
+      registerPeriodicSync('sync-analytics', 1800000); // 30 minutes
+    }
+  }, [isSupported, isRegistered, registerPeriodicSync]);
+
+  if (!isSupported) {
+    return (
+      <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+        <p className="text-sm text-yellow-800">
+          ⚠️ Periodic Background Sync در این مرورگر پشتیبانی نمیشه.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
+      <p className="text-sm text-green-800">
+        ✅ Periodic Sync فعاله: محتوا هر ۱ ساعت و analytics هر ۳۰ دقیقه sync می‌شه.
+      </p>
+    </div>
+  );
+}
+```
+
+---
+
+## 📥 بخش سوم: Background Fetch (دانلود فایل بزرگ)
+
+### ۷. هوک Background Fetch
+
+```jsx
+// hooks/useBackgroundFetch.js
+import { useState, useCallback } from 'react';
+
+export function useBackgroundFetch() {
+  const [isSupported, setIsSupported] = useState(false);
+  const [activeFetches, setActiveFetches] = useState([]);
+
+  useState(() => {
+    setIsSupported('serviceWorker' in navigator && 'BackgroundFetchManager' in window);
+  }, []);
+
+  // ✅ ثبت background fetch
+  const registerBackgroundFetch = useCallback(async (id, urls, options = {}) => {
+    if (!isSupported) {
+      console.warn('Background Fetch not supported');
+      return false;
+    }
+
+    try {
+      const registration = await navigator.serviceWorker.ready;
+      
+      const fetch = await registration.backgroundFetch.fetch(id, urls, {
+        title: options.title || 'دانلود فایل',
+        icons: options.icons || [{ src: '/icons/icon-192.png', sizes: '192x192' }],
+        downloadTotal: options.downloadTotal || 0,
+      });
+
+      setActiveFetches((prev) => [...prev, { id, fetch }]);
+      
+      console.log(`✅ Background fetch registered: ${id}`);
+      return true;
+    } catch (error) {
+      console.error('Failed to register background fetch:', error);
+      return false;
+    }
+  }, [isSupported]);
+
+  // ✅ لغو background fetch
+  const abortBackgroundFetch = useCallback(async (id) => {
+    try {
+      const registration = await navigator.serviceWorker.ready;
+      const fetch = await registration.backgroundFetch.get(id);
+      
+      if (fetch) {
+        await fetch.abort();
+        setActiveFetches((prev) => prev.filter((f) => f.id !== id));
+        console.log(`✅ Background fetch aborted: ${id}`);
+        return true;
+      }
+      return false;
+    } catch (error) {
+      console.error('Failed to abort background fetch:', error);
+      return false;
+    }
+  }, []);
+
+  return { isSupported, activeFetches, registerBackgroundFetch, abortBackgroundFetch };
+}
+```
+
+### ۸. Service Worker برای Background Fetch
+
+```js
+// public/sw.js
+
+// ✅ مدیریت Background Fetch events
+self.addEventListener('backgroundfetchsuccess', (event) => {
+  event.waitUntil(handleFetchSuccess(event));
+});
+
+self.addEventListener('backgroundfetchfailure', (event) => {
+  event.waitUntil(handleFetchFailure(event));
+});
+
+self.addEventListener('backgroundfetchabort', (event) => {
+  console.log(`Background fetch aborted: ${event.tag}`);
+});
+
+self.addEventListener('backgroundfetchclick', (event) => {
+  // ✅ کلیک روی notification دانلود
+  event.waitUntil(
+    self.clients.openWindow(`/downloads/${event.tag}`)
+  );
+});
+
+// ✅ مدیریت موفقیت
+async function handleFetchSuccess(event) {
+  const db = await openDB('downloads', 1, {
+    upgrade(db) {
+      if (!db.objectStoreNames.contains('files')) {
+        db.createObjectStore('files', { keyPath: 'id' });
+      }
+    },
+  });
+
+  // ✅ ذخیره فایل‌های دانلود شده
+  for (const record of event.results) {
+    const response = await record.responseReady;
+    const blob = await response.blob();
+    
+    await db.put('files', {
+      id: event.tag,
+      url: record.request.url,
+      blob,
+      timestamp: Date.now(),
+    });
+  }
+
+  console.log(`✅ Background fetch success: ${event.tag}`);
+}
+
+// ✅ مدیریت شکست
+async function handleFetchFailure(event) {
+  console.error(`❌ Background fetch failed: ${event.tag}`);
+  
+  // ✅ نمایش notification خطا
+  await self.registration.showNotification('دانلود ناموفق', {
+    body: `دانلود ${event.tag} با خطا مواجه شد`,
+    icon: '/icons/icon-192.png',
+  });
+}
+```
+
+### ۹. کامپوننت دانلود فایل بزرگ
+
+```jsx
+// components/LargeFileDownloader.jsx
+import { useState } from 'react';
+import { useBackgroundFetch } from '@/hooks/useBackgroundFetch';
+
+export function LargeFileDownloader() {
+  const { isSupported, registerBackgroundFetch, abortBackgroundFetch } = useBackgroundFetch();
+  const [downloading, setDownloading] = useState(false);
+
+  const handleDownload = async () => {
+    setDownloading(true);
+
+    const success = await registerBackgroundFetch(
+      'course-video-123',
+      [
+        'https://example.com/video-part1.mp4',
+        'https://example.com/video-part2.mp4',
+        'https://example.com/video-part3.mp4',
+      ],
+      {
+        title: 'دانلود دوره آموزشی',
+        downloadTotal: 500 * 1024 * 1024, // 500 MB
+      }
+    );
+
+    if (success) {
+      alert('✅ دانلود در پس‌زمینه شروع شد. می‌تونی اپ رو ببندی!');
+    } else {
+      alert('❌ خطا در شروع دانلود');
+    }
+
+    setDownloading(false);
+  };
+
+  const handleAbort = async () => {
+    await abortBackgroundFetch('course-video-123');
+    alert('✅ دانلود لغو شد');
+  };
+
+  if (!isSupported) {
+    return (
+      <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+        <p className="text-sm text-yellow-800">
+          ⚠️ Background Fetch در این مرورگر پشتیبانی نمیشه.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="p-4 bg-white border border-gray-200 rounded-lg">
+        <h3 className="font-bold mb-2">دوره آموزشی پیشرفته</h3>
+        <p className="text-sm text-gray-600 mb-3">حجم: 500 MB | ۳ قسمت</p>
+        
+        {!downloading ? (
+          <button
+            onClick={handleDownload}
+            className="w-full bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700"
+          >
+            📥 دانلود در پس‌زمینه
+          </button>
+        ) : (
+          <button
+            onClick={handleAbort}
+            className="w-full bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700"
+          >
+            ❌ لغو دانلود
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+```
+
+---
+
+## 🔄 بخش چهارم: Service Worker Lifecycle Events
+
+### ۱۰. مرور کامل Lifecycle Events
+
+```js
+// public/sw.js
+
+// ✅ ۱. Install Event
+self.addEventListener('install', (event) => {
+  console.log('[SW] Installing...');
+  
+  event.waitUntil(
+    (async () => {
+      // ✅ cache کردن assets اولیه
+      const cache = await caches.open('app-v1');
+      await cache.addAll([
+        '/',
+        '/offline.html',
+        '/styles.css',
+        '/app.js',
+      ]);
+      
+      console.log('[SW] Precaching complete');
+    })()
+  );
+  
+  // ✅ رفتن مستقیم به activate (بدون waiting)
+  self.skipWaiting();
+});
+
+// ✅ ۲. Activate Event
+self.addEventListener('activate', (event) => {
+  console.log('[SW] Activating...');
+  
+  event.waitUntil(
+    (async () => {
+      // ✅ پاک کردن cache‌های قدیمی
+      const keys = await caches.keys();
+      await Promise.all(
+        keys
+          .filter((key) => key !== 'app-v1')
+          .map((key) => caches.delete(key))
+      );
+      
+      // ✅ takeover: کنترل همه‌ی کلاینت‌ها
+      await self.clients.claim();
+      
+      console.log('[SW] Activated & claimed all clients');
+    })()
+  );
+});
+
+// ✅ ۳. Fetch Event
+self.addEventListener('fetch', (event) => {
+  // ✅ فقط درخواست‌های same-origin
+  if (!event.request.url.startsWith(self.location.origin)) return;
+
+  event.respondWith(
+    (async () => {
+      // ✅ Cache First strategy
+      const cached = await caches.match(event.request);
+      if (cached) {
+        return cached;
+      }
+
+      // ✅ Network fallback
+      try {
+        const response = await fetch(event.request);
+        
+        // ✅ cache کردن پاسخ موفق
+        if (response.ok) {
+          const cache = await caches.open('app-v1');
+          cache.put(event.request, response.clone());
+        }
+        
+        return response;
+      } catch (error) {
+        // ✅ Offline fallback
+        if (event.request.mode === 'navigate') {
+          return caches.match('/offline.html');
+        }
+        throw error;
+      }
+    })()
+  );
+});
+
+// ✅ ۴. Push Event
+self.addEventListener('push', (event) => {
+  if (!event.data) return;
+
+  const data = event.data.json();
+
+  event.waitUntil(
+    self.registration.showNotification(data.title, {
+      body: data.body,
+      icon: '/icons/icon-192.png',
+      badge: '/icons/badge-72.png',
+      data: data.data,
+    })
+  );
+});
+
+// ✅ ۵. Sync Event (Background Sync)
+self.addEventListener('sync', (event) => {
+  if (event.tag === 'sync-messages') {
+    event.waitUntil(syncMessages());
+  }
+});
+
+// ✅ ۶. Periodic Sync Event
+self.addEventListener('periodicsync', (event) => {
+  if (event.tag === 'update-content') {
+    event.waitUntil(updateContent());
+  }
+});
+
+// ✅ ۷. Message Event (ارتباط با UI)
+self.addEventListener('message', (event) => {
+  if (event.data?.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  }
+  
+  if (event.data?.type === 'GET_VERSION') {
+    event.source.postMessage({ type: 'VERSION', version: 'v1.0.0' });
+  }
+});
+```
+
+---
+
+**🔗 ابزار تست**
+
+- **Chrome DevTools** → Application → Background Services:
+  - Background Sync
+  - Periodic Background Sync
+  - Background Fetch
+- **DevTools** → Application → Service Workers → "Sync" برای تست دستی.
+- **DevTools** → Network → "Offline" برای تست Background Sync.
+- **Console**: `registration.sync.getTags()` برای مشاهده sync tasks.
+- **تست واقعی**: اینترنت رو قطع کن، یه sync register کن، بعد وصل کن و ببین sync میشه یا نه.
+
+**⚠️ چک‌لیست نهایی**
+
+**Background Sync:**
+- [ ] `registration.sync.register()` در user gesture صدا زده شده؟
+- [ ] `sync` event در Service Worker مدیریت شده؟
+- [ ] داده‌ها در IndexedDB ذخیره شدن؟
+- [ ] مدیریت خطا و retry پیاده‌سازی شده؟
+
+**Periodic Background Sync:**
+- [ ] `periodicsync` event مدیریت شده؟
+- [ ] `minInterval` درست تنظیم شده؟
+- [ ] Permission بررسی شده؟
+
+**Background Fetch:**
+- [ ] `backgroundFetch.register()` پیاده‌سازی شده؟
+- [ ] `backgroundfetchsuccess` و `backgroundfetchfailure` مدیریت شدن؟
+- [ ] Progress به کاربر نشون داده میشه؟
+
+**Service Worker Lifecycle:**
+- [ ] `skipWaiting()` در install استفاده شده؟
+- [ ] `clients.claim()` در activate استفاده شده؟
+- [ ] Cache cleanup در activate پیاده‌سازی شده؟
+- [ ] همه‌ی events درست مدیریت شدن؟
+
+> **قانون ۳ ثانیه‌ای:** DevTools → Application → Background Services رو باز کن. آیا Background Sync، Periodic Sync و Background Fetch رو می‌بینی؟ بعد اینترنت رو قطع کن، یه پیام بفرست (sync register کن)، بعد وصل کن. آیا پیام sync شد؟ اگه نه، یعنی Background Sync درست کار نمی‌کنه!

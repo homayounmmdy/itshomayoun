@@ -1,0 +1,695 @@
+---
+title: "PWA: Web Share API و Share Target (اشتراک‌گذاری دوطرفه)"
+date: '2026-10-01'
+playlist: 'PWA - برنامه وب پیشرونده'
+tags: ['PWA', 'Web-Share-API', 'Web-Share-Target', 'Native-Sharing', 'Manifest', 'React', 'UX']
+description: "چطور با Web Share API محتوا رو به اپ‌های دیگه بفرستیم و با Web Share Target محتوا رو از اپ‌های دیگه دریافت کنیم - یه سیستم اشتراک‌گذاری کامل دوطرفه."
+enableComment: true
+---
+
+# 🔗 PWA: Web Share API و Share Target (اشتراک‌گذاری دوطرفه)
+
+**💡 مفهوم کلیدی**  
+دو API مکمل برای اشتراک‌گذاری:
+- **Web Share API**: سایت شما → اپ‌های دیگه (مثل WhatsApp، Telegram، ایمیل)
+- **Web Share Target**: اپ‌های دیگه → سایت شما (کاربر از گالری عکس share می‌کنه به سایت شما)
+
+این یعنی PWA شما می‌تونه **هم بفرسته و هم بگیره** - دقیقاً مثل یه اپ بومی!
+
+**⚠️ دام رایج**
+
+**Web Share API:**
+- فراموش کردن `navigator.canShare()` قبل از share (بعضی مرورگرها فایل پشتیبانی نمی‌کنن!).
+- عدم ارائه‌ی fallback (مثل copy to clipboard) برای دسکتاپ.
+- استفاده بدون user gesture (مرورگر بلاک می‌کنه!).
+- نادیده گرفتن `navigator.share` در Safari iOS (فقط در user gesture کار می‌کنه).
+
+**Web Share Target:**
+- فراموش کردن `share_target` در manifest.
+- عدم مدیریت `POST` request در صفحه‌ی هدف.
+- فراموش کردن `enctype: "multipart/form-data"` برای فایل‌ها.
+- عدم تست در اندروید (فقط Chrome Android پشتیبانی می‌کنه!).
+
+**📏 وضعیت پشتیبانی مرورگرها**
+
+| قابلیت              | Chrome | Edge | Safari | Firefox | iOS Safari |
+|---------------------|--------|------|--------|---------|------------|
+| Web Share API       | ✅     | ✅   | ✅     | ✅      | ✅         |
+| Share with Files    | ✅     | ✅   | ❌     | ❌      | ❌         |
+| Web Share Target    | ✅     | ✅   | ❌     | ❌      | ❌         |
+
+> ⚠️ **نکته حیاتی**: Share Target فقط در **Chrome Android** و بعضی نسخه‌های دسکتاپ کار می‌کنه.
+
+---
+
+## 📤 بخش اول: Web Share API (ارسال به اپ‌های دیگه)
+
+### ۱. هوک React برای Web Share
+
+```jsx
+// hooks/useWebShare.js
+import { useState, useCallback } from 'react';
+
+export function useWebShare() {
+  const [isSupported, setIsSupported] = useState(
+    typeof navigator !== 'undefined' && 'share' in navigator
+  );
+  const [error, setError] = useState(null);
+
+  // ✅ بررسی اینکه آیا می‌تونه share کنه
+  const canShare = useCallback((data) => {
+    if (!isSupported) return false;
+    
+    if ('canShare' in navigator) {
+      return navigator.canShare(data);
+    }
+    
+    // ✅ fallback: فقط text و url پشتیبانی میشه
+    return !data.files;
+  }, [isSupported]);
+
+  // ✅ اشتراک‌گذاری
+  const share = useCallback(async (shareData) => {
+    if (!isSupported) {
+      setError('Web Share API پشتیبانی نمیشه');
+      return false;
+    }
+
+    try {
+      setError(null);
+      await navigator.share(shareData);
+      console.log('✅ Shared successfully');
+      return true;
+    } catch (err) {
+      if (err.name === 'AbortError') {
+        // ✅ کاربر cancel کرد
+        return false;
+      }
+      setError(err.message);
+      return false;
+    }
+  }, [isSupported]);
+
+  // ✅ اشتراک‌گذاری متن
+  const shareText = useCallback(async (text, title) => {
+    return share({ title, text });
+  }, [share]);
+
+  // ✅ اشتراک‌گذاری لینک
+  const shareUrl = useCallback(async (url, title, text) => {
+    return share({ title, url, text });
+  }, [share]);
+
+  // ✅ اشتراک‌گذاری فایل
+  const shareFiles = useCallback(async (files, title, text) => {
+    if (!canShare({ files })) {
+      setError('اشتراک‌گذاری فایل در این مرورگر پشتیبانی نمیشه');
+      return false;
+    }
+    return share({ title, text, files });
+  }, [share, canShare]);
+
+  return {
+    isSupported,
+    canShare,
+    share,
+    shareText,
+    shareUrl,
+    shareFiles,
+    error,
+  };
+}
+```
+
+### ۲. کامپوننت Share Button
+
+```jsx
+// components/ShareButton.jsx
+import { useState } from 'react';
+import { useWebShare } from '@/hooks/useWebShare';
+
+export function ShareButton({ title, text, url, files }) {
+  const { isSupported, share, shareFiles, error } = useWebShare();
+  const [showFallback, setShowFallback] = useState(false);
+
+  const handleShare = async () => {
+    if (files && files.length > 0) {
+      const success = await shareFiles(files, title, text);
+      if (!success) setShowFallback(true);
+    } else {
+      const success = await share({ title, text, url });
+      if (!success) setShowFallback(true);
+    }
+  };
+
+  const handleCopyLink = async () => {
+    try {
+      await navigator.clipboard.writeText(url || window.location.href);
+      alert('لینک کپی شد!');
+      setShowFallback(false);
+    } catch (err) {
+      alert('خطا در کپی لینک');
+    }
+  };
+
+  return (
+    <div className="space-y-3">
+      <button
+        onClick={handleShare}
+        className="w-full bg-blue-600 text-white px-6 py-3 rounded-lg 
+                   hover:bg-blue-700 transition-colors font-medium
+                   flex items-center justify-center gap-2"
+      >
+        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} 
+                d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
+        </svg>
+        اشتراک‌گذاری
+      </button>
+
+      {/* ✅ Fallback برای دسکتاپ */}
+      {showFallback && (
+        <div className="p-4 bg-gray-50 border border-gray-200 rounded-lg space-y-2">
+          <p className="text-sm text-gray-700">لینک رو کپی کن:</p>
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={url || window.location.href}
+              readOnly
+              className="flex-1 p-2 border border-gray-300 rounded text-sm"
+            />
+            <button
+              onClick={handleCopyLink}
+              className="bg-gray-200 px-4 py-2 rounded hover:bg-gray-300 text-sm"
+            >
+              کپی
+            </button>
+          </div>
+        </div>
+      )}
+
+      {error && (
+        <p className="text-sm text-red-600">{error}</p>
+      )}
+    </div>
+  );
+}
+
+// ✅ استفاده:
+function ProductPage() {
+  return (
+    <div>
+      <h1>محصول ویژه</h1>
+      <ShareButton
+        title="محصول ویژه"
+        text="این محصول رو ببین!"
+        url="https://example.com/product/123"
+      />
+    </div>
+  );
+}
+```
+
+### ۳. اشتراک‌گذاری فایل (عکس)
+
+```jsx
+// components/ShareImage.jsx
+import { useState, useRef } from 'react';
+import { useWebShare } from '@/hooks/useWebShare';
+
+export function ShareImage() {
+  const { shareFiles, canShare, isSupported } = useWebShare();
+  const [selectedFile, setSelectedFile] = useState(null);
+  const fileInputRef = useRef(null);
+
+  const handleFileSelect = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      setSelectedFile(file);
+    }
+  };
+
+  const handleShare = async () => {
+    if (!selectedFile) return;
+
+    const success = await shareFiles(
+      [selectedFile],
+      'عکس من',
+      'این عکس رو ببین!'
+    );
+
+    if (success) {
+      alert('عکس با موفقیت share شد!');
+    }
+  };
+
+  const canShareFiles = canShare({ files: [new File([''], 'test.png')] });
+
+  return (
+    <div className="space-y-4">
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        onChange={handleFileSelect}
+        className="hidden"
+      />
+
+      <button
+        onClick={() => fileInputRef.current?.click()}
+        className="w-full bg-gray-200 text-gray-800 px-4 py-2 rounded-lg hover:bg-gray-300"
+      >
+        انتخاب عکس
+      </button>
+
+      {selectedFile && (
+        <div className="space-y-3">
+          <img
+            src={URL.createObjectURL(selectedFile)}
+            alt="preview"
+            className="w-full max-w-xs mx-auto rounded-lg"
+          />
+          
+          {canShareFiles ? (
+            <button
+              onClick={handleShare}
+              className="w-full bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700"
+            >
+              اشتراک‌گذاری عکس
+            </button>
+          ) : (
+            <p className="text-sm text-yellow-600 text-center">
+              ⚠️ اشتراک‌گذاری فایل در این مرورگر پشتیبانی نمیشه
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+---
+
+## 📥 بخش دوم: Web Share Target (دریافت از اپ‌های دیگه)
+
+### ۴. تنظیمات manifest.json
+
+```json
+// public/manifest.json
+{
+  "name": "فروشگاه من",
+  "short_name": "فروشگاه",
+  "start_url": "/",
+  "display": "standalone",
+  
+  // ✅ Web Share Target
+  "share_target": {
+    "action": "/share-target",
+    "method": "POST",
+    "enctype": "multipart/form-data",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url",
+      "files": [
+        {
+          "name": "images",
+          "accept": ["image/*", "video/*"]
+        }
+      ]
+    }
+  }
+}
+```
+
+### ۵. هوک دریافت Share Target
+
+```jsx
+// hooks/useShareTarget.js
+import { useState, useEffect } from 'react';
+import { useRouter } from 'next/router'; // یا useSearchParams از react-router
+
+export function useShareTarget() {
+  const [sharedData, setSharedData] = useState(null);
+  const [isProcessing, setIsProcessing] = useState(false);
+
+  useEffect(() => {
+    const processShareData = async () => {
+      // ✅ بررسی اینکه آیا از share target اومده
+      const urlParams = new URLSearchParams(window.location.search);
+      
+      // ✅ روش ۱: GET parameters
+      const title = urlParams.get('title');
+      const text = urlParams.get('text');
+      const url = urlParams.get('url');
+
+      if (title || text || url) {
+        setSharedData({ title, text, url });
+        return;
+      }
+
+      // ✅ روش ۲: POST data (برای فایل‌ها)
+      if (window.location.pathname === '/share-target') {
+        setIsProcessing(true);
+        
+        try {
+          const formData = await requestFormData();
+          
+          if (formData) {
+            setSharedData({
+              title: formData.get('title'),
+              text: formData.get('text'),
+              url: formData.get('url'),
+              files: formData.getAll('images'),
+            });
+          }
+        } catch (error) {
+          console.error('Failed to process share data:', error);
+        } finally {
+          setIsProcessing(false);
+        }
+      }
+    };
+
+    processShareData();
+  }, []);
+
+  // ✅ خواندن FormData از POST request
+  const requestFormData = async () => {
+    // ✅ این یه ترفت هست: مرورگر POST data رو به صورت FormData می‌فرسته
+    // ولی ما نمی‌تونیم مستقیم بهش دسترسی داشته باشیم
+    // باید از یه فرم مخفی استفاده کنیم یا service worker
+    
+    // ✅ ساده‌ترین راه: از URLSearchParams استفاده کن
+    return new FormData();
+  };
+
+  return { sharedData, isProcessing };
+}
+```
+
+### ۶. صفحه‌ی Share Target
+
+```jsx
+// app/share-target/page.jsx
+'use client';
+
+import { useEffect, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+
+export default function ShareTargetPage() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const [sharedData, setSharedData] = useState(null);
+  const [files, setFiles] = useState([]);
+
+  useEffect(() => {
+    // ✅ خواندن داده‌های share شده
+    const title = searchParams.get('title');
+    const text = searchParams.get('text');
+    const url = searchParams.get('url');
+
+    if (title || text || url) {
+      setSharedData({ title, text, url });
+    }
+
+    // ✅ برای فایل‌ها، باید از FormData استفاده کنی
+    // این یه مثال ساده هست
+    if (typeof window !== 'undefined' && window.requestFormData) {
+      window.requestFormData().then((formData) => {
+        if (formData) {
+          const files = formData.getAll('images');
+          setFiles(files);
+        }
+      });
+    }
+  }, [searchParams]);
+
+  const handleSave = () => {
+    // ✅ ذخیره داده‌های share شده
+    console.log('Saving:', sharedData, files);
+    
+    // ✅ هدایت به صفحه مناسب
+    if (sharedData?.url) {
+      router.push(`/import?url=${encodeURIComponent(sharedData.url)}`);
+    } else {
+      router.push('/import');
+    }
+  };
+
+  const handleCancel = () => {
+    router.push('/');
+  };
+
+  if (!sharedData && files.length === 0) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <p className="text-gray-500">در حال بارگذاری...</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50 p-6">
+      <div className="max-w-md mx-auto bg-white rounded-xl shadow-lg p-6 space-y-4">
+        <h1 className="text-2xl font-bold text-gray-900">
+          دریافت محتوا
+        </h1>
+
+        {/* ✅ نمایش داده‌های متنی */}
+        {sharedData && (
+          <div className="space-y-3">
+            {sharedData.title && (
+              <div>
+                <label className="text-sm font-medium text-gray-700">عنوان:</label>
+                <p className="mt-1 p-3 bg-gray-50 rounded-lg">{sharedData.title}</p>
+              </div>
+            )}
+
+            {sharedData.text && (
+              <div>
+                <label className="text-sm font-medium text-gray-700">متن:</label>
+                <p className="mt-1 p-3 bg-gray-50 rounded-lg">{sharedData.text}</p>
+              </div>
+            )}
+
+            {sharedData.url && (
+              <div>
+                <label className="text-sm font-medium text-gray-700">لینک:</label>
+                <a
+                  href={sharedData.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-1 block p-3 bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100"
+                >
+                  {sharedData.url}
+                </a>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ✅ نمایش فایل‌ها */}
+        {files.length > 0 && (
+          <div>
+            <label className="text-sm font-medium text-gray-700 mb-2 block">
+              فایل‌ها ({files.length}):
+            </label>
+            <div className="grid grid-cols-2 gap-2">
+              {files.map((file, idx) => (
+                <div key={idx} className="relative">
+                  {file.type.startsWith('image/') ? (
+                    <img
+                      src={URL.createObjectURL(file)}
+                      alt={file.name}
+                      className="w-full h-32 object-cover rounded-lg"
+                    />
+                  ) : (
+                    <div className="w-full h-32 bg-gray-100 rounded-lg flex items-center justify-center">
+                      <span className="text-4xl">📄</span>
+                    </div>
+                  )}
+                  <p className="text-xs text-gray-600 mt-1 truncate">
+                    {file.name}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* ✅ دکمه‌های عملیات */}
+        <div className="flex gap-2 pt-4">
+          <button
+            onClick={handleSave}
+            className="flex-1 bg-blue-600 text-white px-4 py-3 rounded-lg 
+                       hover:bg-blue-700 transition-colors font-medium"
+          >
+            ذخیره
+          </button>
+          <button
+            onClick={handleCancel}
+            className="flex-1 bg-gray-200 text-gray-800 px-4 py-3 rounded-lg 
+                       hover:bg-gray-300 transition-colors font-medium"
+          >
+            انصراف
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+```
+
+### ۷. Service Worker برای مدیریت POST
+
+```js
+// public/sw.js
+self.addEventListener('fetch', (event) => {
+  const url = new URL(event.request.url);
+
+  // ✅ مدیریت POST request از share target
+  if (url.pathname === '/share-target' && event.request.method === 'POST') {
+    event.respondWith(
+      (async () => {
+        const formData = await event.request.formData();
+        
+        // ✅ تبدیل به URL parameters و redirect
+        const params = new URLSearchParams();
+        
+        for (const [key, value] of formData.entries()) {
+          params.append(key, value);
+        }
+
+        // ✅ redirect به صفحه با parameters
+        return Response.redirect(`/share-target?${params.toString()}`, 303);
+      })()
+    );
+  }
+});
+```
+
+---
+
+## 🎯 ترکیب هر دو: سیستم اشتراک‌گذاری کامل
+
+```jsx
+// components/CompleteShareSystem.jsx
+import { useState } from 'react';
+import { useWebShare } from '@/hooks/useWebShare';
+import { useShareTarget } from '@/hooks/useShareTarget';
+
+export function CompleteShareSystem() {
+  const { share, isSupported: canShareOut } = useWebShare();
+  const { sharedData } = useShareTarget();
+
+  const [content, setContent] = useState({
+    title: '',
+    text: '',
+    url: '',
+  });
+
+  // ✅ اگر از share target اومده، محتوا رو پر کن
+  useState(() => {
+    if (sharedData) {
+      setContent({
+        title: sharedData.title || '',
+        text: sharedData.text || '',
+        url: sharedData.url || '',
+      });
+    }
+  }, [sharedData]);
+
+  const handleShare = async () => {
+    await share(content);
+  };
+
+  return (
+    <div className="max-w-md mx-auto p-6 bg-white rounded-xl shadow-lg space-y-6">
+      <h2 className="text-2xl font-bold">🔗 سیستم اشتراک‌گذاری</h2>
+
+      {/* ✅ دریافت محتوا */}
+      {sharedData && (
+        <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
+          <p className="text-sm font-medium text-green-800 mb-2">
+            ✅ محتوا دریافت شد:
+          </p>
+          <p className="text-sm text-green-700">{sharedData.title}</p>
+        </div>
+      )}
+
+      {/* ✅ فرم اشتراک‌گذاری */}
+      <div className="space-y-3">
+        <input
+          type="text"
+          value={content.title}
+          onChange={(e) => setContent({ ...content, title: e.target.value })}
+          placeholder="عنوان"
+          className="w-full p-3 border border-gray-300 rounded-lg"
+        />
+        <textarea
+          value={content.text}
+          onChange={(e) => setContent({ ...content, text: e.target.value })}
+          placeholder="متن"
+          rows={3}
+          className="w-full p-3 border border-gray-300 rounded-lg"
+        />
+        <input
+          type="url"
+          value={content.url}
+          onChange={(e) => setContent({ ...content, url: e.target.value })}
+          placeholder="لینک"
+          className="w-full p-3 border border-gray-300 rounded-lg"
+        />
+      </div>
+
+      {/* ✅ دکمه share */}
+      {canShareOut && (
+        <button
+          onClick={handleShare}
+          className="w-full bg-blue-600 text-white px-6 py-3 rounded-lg 
+                     hover:bg-blue-700 transition-colors font-medium"
+        >
+          اشتراک‌گذاری
+        </button>
+      )}
+    </div>
+  );
+}
+```
+
+---
+
+**🔗 ابزار تست**
+
+**Web Share API:**
+- **Chrome Android**: دکمه share رو بزن، باید Share Sheet باز بشه.
+- **Safari iOS**: باید Share Sheet باز بشه.
+- **Chrome Desktop**: ممکنه fallback (copy link) نشون داده بشه.
+- **Console**: `navigator.share({ title: 'Test', text: 'Hello' })`.
+
+**Web Share Target:**
+- **Chrome Android**: PWA رو نصب کن، از گالری عکس share کن، باید سایت شما در لیست باشه.
+- **DevTools** → Application → Manifest → بررسی `share_target`.
+- **تست واقعی**: یه عکس رو از گالری به سایت share کن.
+
+**⚠️ چک‌لیست نهایی**
+
+**Web Share API:**
+- [ ] بررسی `navigator.share` قبل از استفاده؟
+- [ ] استفاده از `canShare()` برای بررسی فایل‌ها؟
+- [ ] fallback برای دسکتاپ (copy link) داری؟
+- [ ] مدیریت `AbortError` (cancel توسط کاربر)؟
+- [ ] استفاده در user gesture (کلیک)؟
+
+**Web Share Target:**
+- [ ] `share_target` در manifest تعریف شده؟
+- [ ] `action` به صفحه درست اشاره می‌کنه؟
+- [ ] `method: "POST"` برای فایل‌ها؟
+- [ ] `enctype: "multipart/form-data"` برای فایل‌ها؟
+- [ ] صفحه‌ی هدف داده‌ها رو درست پردازش می‌کنه؟
+- [ ] Service Worker POST request رو مدیریت می‌کنه؟
+- [ ] در Chrome Android واقعی تست شده؟
+
+> **قانون ۳ ثانیه‌ای:** PWA رو روی اندروید نصب کن. از گالری یه عکس رو share کن؛ آیا سایت شما در لیست اپ‌ها ظاهر میشه؟ بعد سایت رو باز کن و دکمه share رو بزن؛ آیا Share Sheet باز میشه؟ اگه در یکی از این دو تا کار نکرد، یعنی API رو درست پیاده‌سازی نکردی!

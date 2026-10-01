@@ -1,0 +1,793 @@
+---
+title: "PWA: امنیت و احراز هویت (WebAuthn، CSP، SRI)"
+date: '2026-10-01'
+playlist: 'PWA - برنامه وب پیشرونده'
+tags: ['PWA', 'WebAuthn', 'Credential-Management', 'CSP', 'SRI', 'Security', 'Authentication', 'Biometric']
+description: "چطور با WebAuthn احراز هویت بیومتریک پیاده‌سازی کنیم، با Credential Management API پسوردها رو مدیریت کنیم و با CSP و SRI امنیت PWA رو تأمین کنیم."
+enableComment: true
+---
+
+# 🔐 PWA: امنیت و احراز هویت (WebAuthn، CSP، SRI)
+
+**💡 مفهوم کلیدی**  
+چهار لایه‌ی امنیتی حیاتی برای PWA:
+- **WebAuthn**: احراز هویت بدون پسورد با biometric (اثر انگشت، Face ID) یا security keys
+- **Credential Management API**: ذخیره و بازیابی خودکار پسوردها و credentials
+- **Content Security Policy (CSP)**: جلوگیری از XSS و injection attacks
+- **Subresource Integrity (SRI)**: تأیید یکپارچگی فایل‌های خارجی (CDN)
+
+این یعنی PWA شما می‌تونه مثل اپ‌های بانکی امن باشه: احراز هویت قوی، محافظت در برابر حملات، و تأیید یکپارچگی کد.
+
+**⚠️ دام رایج**
+
+**WebAuthn:**
+- فراموش کردن `navigator.credentials.create()` برای ثبت.
+- عدم مدیریت `navigator.credentials.get()` برای login.
+- عدم ذخیره‌ی credential ID در سرور.
+- نادیده گرفتن fallback برای مرورگرهای قدیمی.
+
+**Credential Management:**
+- فراموش کردن `navigator.credentials.store()`.
+- عدم استفاده از `navigator.credentials.get()` برای auto-fill.
+- نادیده گرفتن `mediation: 'silent'` برای background check.
+
+**CSP:**
+- استفاده از `unsafe-inline` و `unsafe-eval` (ضعف امنیتی!).
+- عدم تنظیم `report-uri` برای گزارش تخلفات.
+- فراموش کردن `frame-ancestors` برای جلوگیری از clickjacking.
+
+**SRI:**
+- فراموش کردن `integrity` attribute.
+- عدم استفاده از `crossorigin="anonymous"`.
+- عدم بروزرسانی hash بعد از تغییر فایل.
+
+**📏 وضعیت پشتیبانی مرورگرها**
+
+| قابلیت                  | Chrome | Edge | Firefox | Safari | iOS Safari |
+|-------------------------|--------|------|---------|--------|------------|
+| WebAuthn                | ✅     | ✅   | ✅      | ✅     | ✅ (14+)   |
+| Credential Management   | ✅     | ✅   | ✅      | ❌     | ❌         |
+| CSP Level 3             | ✅     | ✅   | ✅      | ✅     | ✅         |
+| SRI                     | ✅     | ✅   | ✅      | ✅     | ✅         |
+
+---
+
+## 🔑 بخش اول: WebAuthn (احراز هویت بیومتریک)
+
+### ۱. هوک WebAuthn برای ثبت و Login
+
+```jsx
+// hooks/useWebAuthn.js
+import { useState, useCallback } from 'react';
+
+export function useWebAuthn() {
+  const [isSupported, setIsSupported] = useState(false);
+  const [error, setError] = useState(null);
+
+  useState(() => {
+    setIsSupported(
+      window.PublicKeyCredential &&
+      typeof window.PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable === 'function'
+    );
+  }, []);
+
+  // ✅ تبدیل base64url به ArrayBuffer
+  const base64urlToBuffer = (base64url) => {
+    const base64 = base64url.replace(/-/g, '+').replace(/_/g, '/');
+    const padding = '='.repeat((4 - (base64.length % 4)) % 4);
+    const base64Padded = base64 + padding;
+    const binary = atob(base64Padded);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return bytes.buffer;
+  };
+
+  // ✅ تبدیل ArrayBuffer به base64url
+  const bufferToBase64url = (buffer) => {
+    const bytes = new Uint8Array(buffer);
+    let binary = '';
+    for (let i = 0; i < bytes.length; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+  };
+
+  // ✅ ثبت credential جدید
+  const register = useCallback(async (username, displayName) => {
+    if (!isSupported) {
+      setError('WebAuthn پشتیبانی نمیشه');
+      return null;
+    }
+
+    try {
+      setError(null);
+
+      // ✅ دریافت challenge از سرور
+      const response = await fetch('/api/auth/webauthn/register/options', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, displayName }),
+      });
+
+      const options = await response.json();
+
+      // ✅ تبدیل challenge و userId به ArrayBuffer
+      options.challenge = base64urlToBuffer(options.challenge);
+      options.user.id = base64urlToBuffer(options.user.id);
+
+      if (options.excludeCredentials) {
+        options.excludeCredentials.forEach((cred) => {
+          cred.id = base64urlToBuffer(cred.id);
+        });
+      }
+
+      // ✅ ایجاد credential
+      const credential = await navigator.credentials.create({
+        publicKey: options,
+      });
+
+      // ✅ ارسال به سرور
+      const attestationResponse = {
+        id: credential.id,
+        rawId: bufferToBase64url(credential.rawId),
+        type: credential.type,
+        response: {
+          attestationObject: bufferToBase64url(credential.response.attestationObject),
+          clientDataJSON: bufferToBase64url(credential.response.clientDataJSON),
+        },
+      };
+
+      const verifyResponse = await fetch('/api/auth/webauthn/register/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(attestationResponse),
+      });
+
+      if (verifyResponse.ok) {
+        console.log('✅ WebAuthn registration successful');
+        return true;
+      } else {
+        throw new Error('Registration verification failed');
+      }
+    } catch (err) {
+      setError(err.message);
+      console.error('WebAuthn registration error:', err);
+      return false;
+    }
+  }, [isSupported]);
+
+  // ✅ Login با WebAuthn
+  const login = useCallback(async () => {
+    if (!isSupported) {
+      setError('WebAuthn پشتیبانی نمیشه');
+      return null;
+    }
+
+    try {
+      setError(null);
+
+      // ✅ دریافت challenge از سرور
+      const response = await fetch('/api/auth/webauthn/login/options', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+      const options = await response.json();
+
+      // ✅ تبدیل challenge به ArrayBuffer
+      options.challenge = base64urlToBuffer(options.challenge);
+
+      if (options.allowCredentials) {
+        options.allowCredentials.forEach((cred) => {
+          cred.id = base64urlToBuffer(cred.id);
+        });
+      }
+
+      // ✅ احراز هویت
+      const assertion = await navigator.credentials.get({
+        publicKey: options,
+      });
+
+      // ✅ ارسال به سرور
+      const assertionResponse = {
+        id: assertion.id,
+        rawId: bufferToBase64url(assertion.rawId),
+        type: assertion.type,
+        response: {
+          authenticatorData: bufferToBase64url(assertion.response.authenticatorData),
+          clientDataJSON: bufferToBase64url(assertion.response.clientDataJSON),
+          signature: bufferToBase64url(assertion.response.signature),
+          userHandle: assertion.response.userHandle 
+            ? bufferToBase64url(assertion.response.userHandle) 
+            : null,
+        },
+      };
+
+      const verifyResponse = await fetch('/api/auth/webauthn/login/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(assertionResponse),
+      });
+
+      if (verifyResponse.ok) {
+        const data = await verifyResponse.json();
+        console.log('✅ WebAuthn login successful');
+        return data; // token یا session
+      } else {
+        throw new Error('Login verification failed');
+      }
+    } catch (err) {
+      setError(err.message);
+      console.error('WebAuthn login error:', err);
+      return null;
+    }
+  }, [isSupported]);
+
+  return { isSupported, error, register, login };
+}
+```
+
+### ۲. کامپوننت ثبت و Login با WebAuthn
+
+```jsx
+// components/WebAuthnLogin.jsx
+import { useState } from 'react';
+import { useWebAuthn } from '@/hooks/useWebAuthn';
+
+export function WebAuthnLogin() {
+  const { isSupported, error, register, login } = useWebAuthn();
+  const [mode, setMode] = useState('login'); // login | register
+  const [username, setUsername] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const handleRegister = async () => {
+    if (!username.trim()) return;
+
+    setLoading(true);
+    const success = await register(username, username);
+    
+    if (success) {
+      alert('✅ ثبت نام با موفقیت انجام شد!');
+      setMode('login');
+    }
+    
+    setLoading(false);
+  };
+
+  const handleLogin = async () => {
+    setLoading(true);
+    const result = await login();
+    
+    if (result) {
+      alert('✅ ورود موفقیت‌آمیز!');
+      // ✅ ذخیره token یا redirect
+    }
+    
+    setLoading(false);
+  };
+
+  if (!isSupported) {
+    return (
+      <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+        <p className="text-sm text-yellow-800">
+          ⚠️ WebAuthn در این مرورگر پشتیبانی نمیشه.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-w-md mx-auto p-6 bg-white rounded-xl shadow-lg space-y-4">
+      <h2 className="text-2xl font-bold text-center">🔐 ورود امن</h2>
+
+      {/* ✅ تب‌ها */}
+      <div className="flex gap-2 border-b">
+        <button
+          onClick={() => setMode('login')}
+          className={`flex-1 py-2 font-medium ${
+            mode === 'login' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-500'
+          }`}
+        >
+          ورود
+        </button>
+        <button
+          onClick={() => setMode('register')}
+          className={`flex-1 py-2 font-medium ${
+            mode === 'register' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-500'
+          }`}
+        >
+          ثبت نام
+        </button>
+      </div>
+
+      {/* ✅ فرم ثبت نام */}
+      {mode === 'register' && (
+        <div className="space-y-3">
+          <input
+            type="text"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            placeholder="نام کاربری"
+            className="w-full p-3 border border-gray-300 rounded-lg"
+          />
+          <button
+            onClick={handleRegister}
+            disabled={loading || !username.trim()}
+            className="w-full bg-green-600 text-white px-4 py-3 rounded-lg 
+                       hover:bg-green-700 disabled:opacity-50"
+          >
+            {loading ? 'در حال ثبت...' : '🔑 ثبت نام با اثر انگشت/Face ID'}
+          </button>
+        </div>
+      )}
+
+      {/* ✅ فرم ورود */}
+      {mode === 'login' && (
+        <button
+          onClick={handleLogin}
+          disabled={loading}
+          className="w-full bg-blue-600 text-white px-4 py-3 rounded-lg 
+                     hover:bg-blue-700 disabled:opacity-50"
+        >
+          {loading ? 'در حال احراز هویت...' : '🔓 ورود با اثر انگشت/Face ID'}
+        </button>
+      )}
+
+      {error && (
+        <div role="alert" className="p-3 bg-red-50 border border-red-200 rounded-lg">
+          <p className="text-sm text-red-800">{error}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+---
+
+## 🔑 بخش دوم: Credential Management API
+
+### ۳. هوک مدیریت Credentials
+
+```jsx
+// hooks/useCredentialManagement.js
+import { useState, useCallback } from 'react';
+
+export function useCredentialManagement() {
+  const [isSupported, setIsSupported] = useState(false);
+
+  useState(() => {
+    setIsSupported('credentials' in navigator);
+  }, []);
+
+  // ✅ ذخیره credential
+  const storeCredential = useCallback(async (credential) => {
+    if (!isSupported) {
+      console.warn('Credential Management API not supported');
+      return false;
+    }
+
+    try {
+      await navigator.credentials.store(credential);
+      console.log('✅ Credential stored');
+      return true;
+    } catch (error) {
+      console.error('Failed to store credential:', error);
+      return false;
+    }
+  }, [isSupported]);
+
+  // ✅ بازیابی credential
+  const getCredential = useCallback(async (mediation = 'optional') => {
+    if (!isSupported) {
+      console.warn('Credential Management API not supported');
+      return null;
+    }
+
+    try {
+      const credential = await navigator.credentials.get({
+        password: true,
+        mediation, // silent | optional | required
+      });
+
+      if (credential) {
+        console.log('✅ Credential retrieved');
+        return {
+          id: credential.id,
+          password: credential.password,
+        };
+      }
+
+      return null;
+    } catch (error) {
+      console.error('Failed to get credential:', error);
+      return null;
+    }
+  }, [isSupported]);
+
+  // ✅ ساخت PasswordCredential
+  const createPasswordCredential = useCallback((id, password, name) => {
+    return new PasswordCredential({
+      id,
+      password,
+      name,
+      iconURL: '/icons/icon-192.png',
+    });
+  }, []);
+
+  // ✅ ساخت FederatedCredential (برای OAuth)
+  const createFederatedCredential = useCallback((id, provider) => {
+    return new FederatedCredential({
+      id,
+      provider, // 'https://accounts.google.com' | 'https://www.facebook.com'
+      name: id,
+      iconURL: '/icons/icon-192.png',
+    });
+  }, []);
+
+  return {
+    isSupported,
+    storeCredential,
+    getCredential,
+    createPasswordCredential,
+    createFederatedCredential,
+  };
+}
+```
+
+### ۴. کامپوننت Login با Credential Management
+
+```jsx
+// components/CredentialLogin.jsx
+import { useState, useEffect } from 'react';
+import { useCredentialManagement } from '@/hooks/useCredentialManagement';
+
+export function CredentialLogin() {
+  const { isSupported, storeCredential, getCredential, createPasswordCredential } = 
+    useCredentialManagement();
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  // ✅ بررسی خودکار credential هنگام لود
+  useEffect(() => {
+    const checkStoredCredential = async () => {
+      const credential = await getCredential('silent');
+      
+      if (credential) {
+        setUsername(credential.id);
+        setPassword(credential.password);
+        // ✅ auto-login یا پر کردن فرم
+      }
+    };
+
+    if (isSupported) {
+      checkStoredCredential();
+    }
+  }, [isSupported, getCredential]);
+
+  const handleLogin = async () => {
+    setLoading(true);
+
+    try {
+      // ✅ ارسال به سرور برای تأیید
+      const response = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      });
+
+      if (response.ok) {
+        // ✅ ذخیره credential برای دفعات بعد
+        const credential = createPasswordCredential(username, password, username);
+        await storeCredential(credential);
+        
+        alert('✅ ورود موفقیت‌آمیز!');
+      } else {
+        alert('❌ نام کاربری یا رمز عبور اشتباه است');
+      }
+    } catch (error) {
+      alert('❌ خطا در ورود');
+    }
+
+    setLoading(false);
+  };
+
+  return (
+    <div className="max-w-md mx-auto p-6 bg-white rounded-xl shadow-lg space-y-4">
+      <h2 className="text-2xl font-bold text-center">🔐 ورود</h2>
+
+      <div className="space-y-3">
+        <input
+          type="text"
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+          placeholder="نام کاربری"
+          className="w-full p-3 border border-gray-300 rounded-lg"
+          autoComplete="username"
+        />
+        <input
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          placeholder="رمز عبور"
+          className="w-full p-3 border border-gray-300 rounded-lg"
+          autoComplete="current-password"
+        />
+        <button
+          onClick={handleLogin}
+          disabled={loading || !username || !password}
+          className="w-full bg-blue-600 text-white px-4 py-3 rounded-lg 
+                     hover:bg-blue-700 disabled:opacity-50"
+        >
+          {loading ? 'در حال ورود...' : 'ورود'}
+        </button>
+      </div>
+
+      {!isSupported && (
+        <p className="text-xs text-gray-500 text-center">
+          💡 Credential Management در این مرورگر پشتیبانی نمیشه
+        </p>
+      )}
+    </div>
+  );
+}
+```
+
+---
+
+## 🛡️ بخش سوم: Content Security Policy (CSP)
+
+### ۵. تنظیم CSP در HTML
+
+```html
+<!-- ✅ در <head> یا به صورت HTTP header -->
+<meta 
+  http-equiv="Content-Security-Policy" 
+  content="
+    default-src 'self';
+    script-src 'self' 'unsafe-inline' https://cdn.example.com;
+    style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
+    img-src 'self' data: https:;
+    font-src 'self' https://fonts.gstatic.com;
+    connect-src 'self' https://api.example.com wss://socket.example.com;
+    frame-src 'none';
+    object-src 'none';
+    base-uri 'self';
+    form-action 'self';
+    frame-ancestors 'none';
+    upgrade-insecure-requests;
+  "
+/>
+```
+
+### ۶. تنظیم CSP در Next.js
+
+```js
+// next.config.js
+module.exports = {
+  async headers() {
+    return [
+      {
+        source: '/(.*)',
+        headers: [
+          {
+            key: 'Content-Security-Policy',
+            value: `
+              default-src 'self';
+              script-src 'self' 'unsafe-eval' 'unsafe-inline';
+              style-src 'self' 'unsafe-inline';
+              img-src 'self' data: https:;
+              font-src 'self' https://fonts.gstatic.com;
+              connect-src 'self' https://api.example.com;
+              frame-src 'none';
+              object-src 'none';
+              base-uri 'self';
+              form-action 'self';
+              frame-ancestors 'none';
+              upgrade-insecure-requests;
+            `.replace(/\s{2,}/g, ' ').trim(),
+          },
+        ],
+      },
+    ];
+  },
+};
+```
+
+### ۷. گزارش تخلفات CSP
+
+```html
+<!-- ✅ اضافه کردن report-uri -->
+<meta 
+  http-equiv="Content-Security-Policy" 
+  content="
+    default-src 'self';
+    report-uri /api/csp-report;
+    report-to csp-endpoint;
+  "
+/>
+
+<!-- ✅ تعریف reporting endpoint -->
+<meta 
+  http-equiv="Reporting-Endpoints" 
+  content='csp-endpoint="/api/csp-report"'
+/>
+```
+
+```js
+// pages/api/csp-report.js (Next.js)
+export default function handler(req, res) {
+  if (req.method === 'POST') {
+    const report = req.body;
+    
+    // ✅ ارسال به سرویس لاگ
+    console.error('CSP Violation:', report);
+    
+    // ✅ یا ارسال به Sentry
+    // Sentry.captureMessage('CSP Violation', { extra: report });
+    
+    res.status(204).end();
+  } else {
+    res.status(405).end();
+  }
+}
+```
+
+---
+
+## 🔒 بخش چهارم: Subresource Integrity (SRI)
+
+### ۸. استفاده از SRI در HTML
+
+```html
+<!-- ✅ اضافه کردن integrity و crossorigin -->
+<script 
+  src="https://cdn.example.com/library.js"
+  integrity="sha384-oqVuAfXRKap7fdgcCY5uykM6+R9GqQ8K/uxy9rx7HNQlGYl1kPzQho1wx4JwY8wC"
+  crossorigin="anonymous"
+></script>
+
+<link 
+  rel="stylesheet" 
+  href="https://cdn.example.com/styles.css"
+  integrity="sha384-LnZ7l6YQdZ8QZ8QZ8QZ8QZ8QZ8QZ8QZ8QZ8QZ8QZ8QZ8QZ8QZ8QZ8QZ8QZ8QZ8QZ"
+  crossorigin="anonymous"
+/>
+```
+
+### ۹. تولید hash با OpenSSL
+
+```bash
+# ✅ تولید SHA-384 hash
+openssl dgst -sha384 -binary library.js | openssl base64 -A
+
+# ✅ یا با Node.js
+node -e "
+  const crypto = require('crypto');
+  const fs = require('fs');
+  const file = fs.readFileSync('library.js');
+  const hash = crypto.createHash('sha384').update(file).digest('base64');
+  console.log('sha384-' + hash);
+"
+```
+
+### ۱۰. کامپوننت React با SRI
+
+```jsx
+// components/SecureScript.jsx
+import { useEffect } from 'react';
+
+export function SecureScript({ src, integrity }) {
+  useEffect(() => {
+    const script = document.createElement('script');
+    script.src = src;
+    script.integrity = integrity;
+    script.crossOrigin = 'anonymous';
+    
+    script.onerror = () => {
+      console.error(`Failed to load script: ${src}`);
+      // ✅ ارسال به monitoring
+    };
+    
+    document.body.appendChild(script);
+    
+    return () => {
+      document.body.removeChild(script);
+    };
+  }, [src, integrity]);
+
+  return null;
+}
+
+// ✅ استفاده:
+<SecureScript 
+  src="https://cdn.example.com/analytics.js"
+  integrity="sha384-..."
+/>
+```
+
+### ۱۱. Next.js با SRI
+
+```jsx
+// pages/_document.jsx
+import { Html, Head, Main, NextScript } from 'next/document';
+
+export default function Document() {
+  return (
+    <Html>
+      <Head>
+        {/* ✅ CSP header */}
+        <meta 
+          http-equiv="Content-Security-Policy" 
+          content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.example.com;"
+        />
+        
+        {/* ✅ SRI برای CDN scripts */}
+        <script 
+          src="https://cdn.example.com/library.js"
+          integrity="sha384-..."
+          crossOrigin="anonymous"
+        />
+      </Head>
+      <body>
+        <Main />
+        <NextScript />
+      </body>
+    </Html>
+  );
+}
+```
+
+---
+
+**🔗 ابزار تست**
+
+**WebAuthn:**
+- **Chrome DevTools** → Application → Credentials (مشاهده credentials ذخیره‌شده).
+- **تست واقعی**: روی دستگاه با biometric sensor (اثر انگشت/Face ID) تست کن.
+- **webauthn.io**: [webauthn.io](https://webauthn.io) برای تست آنلاین.
+
+**Credential Management:**
+- **Chrome Settings** → Passwords → مشاهده پسوردهای ذخیره‌شده.
+- **Console**: `navigator.credentials.get({ password: true })`.
+
+**CSP:**
+- **Chrome DevTools** → Console → مشاهده CSP violations.
+- **CSP Evaluator**: [csp-evaluator.withgoogle.com](https://csp-evaluator.withgoogle.com) برای بررسی CSP.
+- **Report URI**: [report-uri.com](https://report-uri.com) برای دریافت گزارش‌ها.
+
+**SRI:**
+- **SRI Hash Generator**: [srihash.org](https://www.srihash.org) برای تولید hash.
+- **Chrome DevTools** → Network → بررسی integrity attribute.
+- **تست واقعی**: فایل CDN رو دستکاری کن؛ باید لود نشه!
+
+**⚠️ چک‌لیست نهایی**
+
+**WebAuthn:**
+- [ ] `navigator.credentials.create()` برای ثبت پیاده‌سازی شده؟
+- [ ] `navigator.credentials.get()` برای login پیاده‌سازی شده؟
+- [ ] Credential ID در سرور ذخیره شده؟
+- [ ] Fallback برای مرورگرهای قدیمی داری؟
+
+**Credential Management:**
+- [ ] `navigator.credentials.store()` بعد از login موفق؟
+- [ ] `navigator.credentials.get()` برای auto-fill؟
+- [ ] `mediation: 'silent'` برای background check؟
+
+**CSP:**
+- [ ] CSP header تنظیم شده؟
+- [ ] `unsafe-inline` و `unsafe-eval` حداقل شدن؟
+- [ ] `report-uri` یا `report-to` برای گزارش تخلفات؟
+- [ ] `frame-ancestors 'none'` برای جلوگیری از clickjacking؟
+- [ ] `upgrade-insecure-requests` برای HTTPS؟
+
+**SRI:**
+- [ ] `integrity` attribute برای همه‌ی CDN scripts؟
+- [ ] `crossorigin="anonymous"` اضافه شده؟
+- [ ] Hash با الگوریتم SHA-384 یا بالاتر؟
+- [ ] Hash بعد از تغییر فایل بروزرسانی شده؟
+
+> **قانون ۳ ثانیه‌ای:** DevTools → Console رو باز کن. آیا CSP violation می‌بینی؟ بعد یه script خارجی بدون integrity اضافه کن؛ باید لود نشه! بعد WebAuthn رو تست کن؛ آیا می‌تونی با اثر انگشت login کنی؟ اگه نه، یعنی API رو درست پیاده‌سازی نکردی!

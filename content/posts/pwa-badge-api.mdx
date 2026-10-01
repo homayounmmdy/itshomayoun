@@ -1,0 +1,416 @@
+---
+title: "PWA: Badge API و نشان‌گر تعداد روی آیکون اپ"
+date: '2026-10-01'
+playlist: 'PWA - برنامه وب پیشرونده'
+tags: ['PWA', 'Badge-API', 'Notification', 'App-Badge', 'React', 'UX']
+description: "چطور با Badge API نشان‌گر تعداد (مثل اعلان‌های خوانده‌نشده) روی آیکون PWA نمایش بدیم، چرا این قابلیت engagement رو افزایش میده و چطور با Notification API ترکیبش کنیم."
+enableComment: true
+---
+
+# 🔴 PWA: Badge API و نشان‌گر تعداد روی آیکون اپ
+
+**💡 مفهوم کلیدی**  
+Badge API به PWA اجازه میده **نشان‌گر تعداد** (badge) روی آیکون اپ در هوم اسکرین یا taskbar نمایش بده. این دقیقاً مثل badge‌های اپ‌های بومی هست (مثل تعداد ایمیل‌های خوانده‌نشده یا پیام‌های جدید). این قابلیت **engagement کاربر** رو به شدت افزایش میده چون کاربر با یه نگاه می‌فهمه که محتوای جدیدی منتظرشه.
+
+**⚠️ دام رایج**  
+- فراموش کردن `setAppBadge()` نیاز به user activation داره (بدون کلیک کاربر خطا میده!).
+- عدم پاک کردن badge با `clearAppBadge()` وقتی کاربر محتوا رو دید.
+- استفاده از اعداد خیلی بزرگ (بعضی مرورگرها فقط ۱-۹۹ نشون میدن).
+- عدم ترکیب با Notification API (badge باید با اعلان‌ها sync باشه).
+- نادیده گرفتن اینکه فقط در Chromium کار می‌کنه.
+- عدم بررسی `navigator.setAppBadge` قبل از استفاده.
+- فراموش کردن `clearAppBadge()` در cleanup.
+- استفاده برای اهداف spam (کاربر کلافه میشه!).
+
+**📏 وضعیت پشتیبانی مرورگرها**
+
+| مرورگر       | پشتیبانی | محدودیت                                  |
+|--------------|-----------|-------------------------------------------|
+| Chrome       | ✅        | نسخه 83+ + نیاز به user activation       |
+| Edge         | ✅        | نسخه 83+                                 |
+| Opera        | ✅        | نسخه 69+                                 |
+| Safari       | ❌        | **پشتیبانی نمیشه**                        |
+| iOS Safari   | ❌        | پشتیبانی نمیشه                            |
+| Firefox      | ❌        | **پشتیبانی نمیشه**                        |
+
+> ⚠️ **نکته حیاتی**: این API فقط در مرورگرهای **Chromium-based** کار می‌کنه. همیشه fallback بذار!
+
+**🛠️ راه‌حل سریع در کد**
+
+### ۱. هوک React برای مدیریت Badge
+
+```jsx
+// hooks/useAppBadge.js
+import { useState, useCallback, useEffect } from 'react';
+
+export function useAppBadge() {
+  const [isSupported, setIsSupported] = useState(false);
+  const [currentBadge, setCurrentBadge] = useState(0);
+
+  useEffect(() => {
+    setIsSupported('setAppBadge' in navigator);
+  }, []);
+
+  // ✅ تنظیم badge با عدد
+  const setBadge = useCallback(async (count) => {
+    if (!isSupported) {
+      console.warn('Badge API not supported');
+      return false;
+    }
+
+    try {
+      if (count > 0) {
+        await navigator.setAppBadge(count);
+        setCurrentBadge(count);
+      } else {
+        await navigator.clearAppBadge();
+        setCurrentBadge(0);
+      }
+      return true;
+    } catch (error) {
+      console.error('Failed to set badge:', error);
+      return false;
+    }
+  }, [isSupported]);
+
+  // ✅ افزایش badge
+  const incrementBadge = useCallback(async (amount = 1) => {
+    const newCount = currentBadge + amount;
+    return setBadge(newCount);
+  }, [currentBadge, setBadge]);
+
+  // ✅ پاک کردن badge
+  const clearBadge = useCallback(async () => {
+    if (!isSupported) return false;
+
+    try {
+      await navigator.clearAppBadge();
+      setCurrentBadge(0);
+      return true;
+    } catch (error) {
+      console.error('Failed to clear badge:', error);
+      return false;
+    }
+  }, [isSupported]);
+
+  // ✅ تنظیم badge بدون عدد (فقط نقطه قرمز)
+  const setGenericBadge = useCallback(async () => {
+    if (!isSupported) return false;
+
+    try {
+      await navigator.setAppBadge(); // بدون عدد
+      return true;
+    } catch (error) {
+      console.error('Failed to set generic badge:', error);
+      return false;
+    }
+  }, [isSupported]);
+
+  return {
+    isSupported,
+    currentBadge,
+    setBadge,
+    incrementBadge,
+    clearBadge,
+    setGenericBadge,
+  };
+}
+```
+
+### ۲. کامپوننت اعلان با Badge
+
+```jsx
+// components/NotificationWithBadge.jsx
+import { useEffect } from 'react';
+import { useAppBadge } from '@/hooks/useAppBadge';
+
+export function NotificationWithBadge({ unreadCount, onMarkAllRead }) {
+  const { setBadge, clearBadge } = useAppBadge();
+
+  // ✅ وقتی تعداد اعلان‌های خوانده‌نشده تغییر کرد
+  useEffect(() => {
+    if (unreadCount > 0) {
+      setBadge(unreadCount);
+    } else {
+      clearBadge();
+    }
+  }, [unreadCount, setBadge, clearBadge]);
+
+  const handleMarkAllRead = () => {
+    onMarkAllRead();
+    clearBadge(); // ✅ پاک کردن badge
+  };
+
+  return (
+    <div className="p-6 bg-white border border-gray-200 rounded-lg space-y-4">
+      <div className="flex items-center justify-between">
+        <h3 className="font-bold text-lg">🔔 اعلان‌ها</h3>
+        {unreadCount > 0 && (
+          <span className="px-3 py-1 bg-red-500 text-white text-sm rounded-full">
+            {unreadCount} خوانده‌نشده
+          </span>
+        )}
+      </div>
+
+      {unreadCount > 0 ? (
+        <>
+          <p className="text-gray-600">
+            شما {unreadCount} اعلان خوانده‌نشده دارید.
+          </p>
+          <button
+            onClick={handleMarkAllRead}
+            className="w-full bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700"
+          >
+            علامت‌گذاری همه به عنوان خوانده‌شده
+          </button>
+        </>
+      ) : (
+        <p className="text-gray-500 text-center py-4">
+          ✅ همه اعلان‌ها خوانده شدن
+        </p>
+      )}
+    </div>
+  );
+}
+```
+
+### ۳. Badge برای سبد خرید
+
+```jsx
+// components/CartWithBadge.jsx
+import { useEffect } from 'react';
+import { useAppBadge } from '@/hooks/useAppBadge';
+
+export function CartWithBadge({ cartItems }) {
+  const { setBadge, clearBadge } = useAppBadge();
+
+  useEffect(() => {
+    const totalItems = cartItems.reduce((sum, item) => sum + item.quantity, 0);
+    
+    if (totalItems > 0) {
+      setBadge(totalItems);
+    } else {
+      clearBadge();
+    }
+  }, [cartItems, setBadge, clearBadge]);
+
+  const totalItems = cartItems.reduce((sum, item) => sum + item.quantity, 0);
+
+  return (
+    <div className="relative inline-block">
+      <button className="p-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+        🛒 سبد خرید
+      </button>
+      
+      {totalItems > 0 && (
+        <span className="absolute -top-2 -right-2 bg-red-500 text-white text-xs font-bold w-6 h-6 rounded-full flex items-center justify-center">
+          {totalItems > 99 ? '99+' : totalItems}
+        </span>
+      )}
+    </div>
+  );
+}
+```
+
+### ۴. ترکیب با Notification API
+
+```jsx
+// hooks/useNotificationWithBadge.js
+import { useCallback } from 'react';
+import { useAppBadge } from './useAppBadge';
+
+export function useNotificationWithBadge() {
+  const { incrementBadge, clearBadge } = useAppBadge();
+
+  // ✅ نمایش اعلان و افزایش badge
+  const showNotification = useCallback(async (title, options = {}) => {
+    if (!('Notification' in window)) {
+      console.warn('Notification API not supported');
+      return false;
+    }
+
+    try {
+      // ✅ درخواست مجوز
+      if (Notification.permission === 'default') {
+        const permission = await Notification.requestPermission();
+        if (permission !== 'granted') {
+          return false;
+        }
+      }
+
+      if (Notification.permission !== 'granted') {
+        return false;
+      }
+
+      // ✅ نمایش اعلان
+      const notification = new Notification(title, {
+        body: options.body || '',
+        icon: options.icon || '/icons/icon-192.png',
+        badge: options.badge || '/icons/badge-72.png', // ✅ آیکون badge (72×72)
+        tag: options.tag || 'default',
+        data: options.data || {},
+        ...options,
+      });
+
+      // ✅ افزایش badge
+      await incrementBadge();
+
+      // ✅ کلیک روی اعلان
+      notification.onclick = () => {
+        window.focus();
+        notification.close();
+        
+        // ✅ پاک کردن badge وقتی کاربر اعلان رو دید
+        clearBadge();
+      };
+
+      return true;
+    } catch (error) {
+      console.error('Notification failed:', error);
+      return false;
+    }
+  }, [incrementBadge, clearBadge]);
+
+  return { showNotification, clearBadge };
+}
+
+// ✅ استفاده:
+function NotificationExample() {
+  const { showNotification } = useNotificationWithBadge();
+
+  const handleSendMessage = async () => {
+    await showNotification('پیام جدید', {
+      body: 'شما یک پیام جدید از علی دارید',
+      icon: '/icons/icon-192.png',
+      badge: '/icons/badge-72.png',
+      tag: 'message',
+    });
+  };
+
+  return (
+    <button onClick={handleSendMessage}>
+      ارسال پیام تست
+    </button>
+  );
+}
+```
+
+### ۵. Badge در Service Worker (برای Push Notifications)
+
+```js
+// public/sw.js
+self.addEventListener('push', (event) => {
+  const data = event.data.json();
+
+  event.waitUntil(
+    (async () => {
+      // ✅ نمایش اعلان
+      await self.registration.showNotification(data.title, {
+        body: data.body,
+        icon: '/icons/icon-192.png',
+        badge: '/icons/badge-72.png',
+        tag: data.tag || 'push',
+        data: data,
+      });
+
+      // ✅ افزایش badge
+      if ('setAppBadge' in self.registration) {
+        const currentBadge = await self.registration.getBadge?.() || 0;
+        await self.registration.setAppBadge(currentBadge + 1);
+      }
+    })()
+  );
+});
+
+// ✅ وقتی کاربر اعلان رو باز کرد
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+
+  event.waitUntil(
+    (async () => {
+      // ✅ پاک کردن badge
+      if ('clearAppBadge' in self.registration) {
+        await self.registration.clearAppBadge();
+      }
+
+      // ✅ باز کردن اپ
+      const clients = await self.clients.matchAll({ type: 'window' });
+      if (clients.length > 0) {
+        clients[0].focus();
+      } else {
+        await self.clients.openWindow('/');
+      }
+    })()
+  );
+});
+```
+
+### ۶. Fallback برای مرورگرهای بدون پشتیبانی
+
+```jsx
+// components/BadgeWithFallback.jsx
+import { useAppBadge } from '@/hooks/useAppBadge';
+
+export function BadgeWithFallback({ count }) {
+  const { isSupported, setBadge } = useAppBadge();
+
+  // ✅ تلاش برای تنظیم badge
+  if (isSupported && count > 0) {
+    setBadge(count);
+  }
+
+  return (
+    <div className="relative inline-block">
+      <button className="p-3 bg-blue-600 text-white rounded-lg">
+        🔔 اعلان‌ها
+      </button>
+      
+      {/* ✅ Badge بصری (همیشه نشون داده میشه) */}
+      {count > 0 && (
+        <span className="absolute -top-2 -right-2 bg-red-500 text-white text-xs font-bold w-6 h-6 rounded-full flex items-center justify-center">
+          {count > 99 ? '99+' : count}
+        </span>
+      )}
+
+      {/* ✅ پیام برای مرورگرهای بدون پشتیبانی */}
+      {!isSupported && count > 0 && (
+        <p className="text-xs text-gray-500 mt-1">
+          Badge روی آیکون اپ فقط در Chrome و Edge پشتیبانی میشه
+        </p>
+      )}
+    </div>
+  );
+}
+```
+
+### ۷. آیکون Badge (72×72)
+
+```html
+<!-- ✅ آیکون badge باید ساده و تک‌رنگ باشه -->
+<!-- public/icons/badge-72.png -->
+<!-- یک دایره ساده یا لوگوی کوچک تک‌رنگ -->
+```
+
+**🔗 ابزار تست**
+
+- **Chrome DevTools** → Application → Badges (مشاهده badge فعلی).
+- **Console**: `navigator.setAppBadge(5)` برای تست سریع.
+- **تست واقعی**: روی اندروید یا ویندوز با Chrome تست کن.
+- **Safari/Firefox**: تست کن که fallback درست کار می‌کنه.
+- **User Activation**: قبل از کلیک، `setAppBadge()` خطا میده.
+
+**⚠️ چک‌لیست نهایی**
+
+- [ ] بررسی `setAppBadge` قبل از استفاده؟
+- [ ] استفاده فقط در response به user gesture؟
+- [ ] پاک کردن badge با `clearAppBadge()` وقتی کاربر محتوا رو دید؟
+- [ ] ترکیب با Notification API؟
+- [ ] Fallback برای مرورگرهای بدون پشتیبانی؟
+- [ ] آیکون badge (72×72) ساختی؟
+- [ ] Badge در Service Worker برای push notifications پیاده‌سازی شده؟
+- [ ] cleanup در unmount کامپوننت؟
+- [ ] تست در Chrome Android واقعی؟
+- [ ] تست در Chrome Desktop واقعی؟
+- [ ] عدم استفاده برای spam؟
+
+> **قانون ۳ ثانیه‌ای:** Console رو باز کن و بنویس `navigator.setAppBadge(5)`. آیا badge روی آیکون اپ ظاهر میشه؟ بعد بنویس `navigator.clearAppBadge()`. آیا badge پاک میشه؟ اگه خطا داد، یعنی user activation نداری (باید اول یه جا کلیک کنی). بعد Safari رو تست کن؛ باید `setAppBadge` undefined باشه و fallback کار کنه.

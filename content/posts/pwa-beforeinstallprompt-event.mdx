@@ -1,0 +1,481 @@
+---
+title: "PWA: کنترل دستی Install Prompt با beforeinstallprompt"
+date: '2026-10-01'
+playlist: 'PWA - برنامه وب پیشرونده'
+tags: ['PWA', 'beforeinstallprompt', 'Install-Prompt', 'Service-Worker', 'React', 'UX', 'A2HS']
+description: "چطور با beforeinstallprompt event کنترل کامل روی زمان نمایش دکمه‌ی نصب داشته باشیم، چرا نباید بلافاصله بعد از لود ظاهر بشه و چطور نرخ نصب رو بهینه کنیم."
+enableComment: true
+---
+
+# 📲 PWA: کنترل دستی Install Prompt با beforeinstallprompt
+
+**💡 مفهوم کلیدی**  
+مرورگر به صورت خودکار یه بنر نصب (Mini Info Bar) در پایین صفحه نشون میده، اما این بنر:
+- زمان‌بندی نامناسبی داره (معمولاً اول صفحه!)
+- ظاهرش قابل سفارشی‌سازی نیست
+- کاربر ممکنه نادیده‌اش بگیره
+
+با رویداد `beforeinstallprompt` می‌تونی این رفتار پیش‌فرض رو بگیری و **دکمه‌ی نصب سفارشی** خودت رو **در زمان مناسب** نشون بدی. این یعنی نرخ نصب بالاتر و تجربه‌ی کاربری بهتر.
+
+**⚠️ دام رایج**  
+- نشون دادن دکمه‌ی نصب بلافاصله بعد از لود (کاربر هنوز ارزش سایت رو ندیده!).
+- فراموش کردن `e.preventDefault()` → بنر پیش‌فرض مرورگر همزمان ظاهر میشه.
+- ذخیره نکردن event در state → event فقط یک‌بار fire میشه و از دست میره.
+- فراخوانی `prompt()` بیش از یک بار روی همون event (خطا میده!).
+- نشون دادن دکمه به کاربری که **قبلاً نصب کرده**.
+- عدم گوش دادن به `appinstalled` event برای cleanup.
+- نادیده گرفتن اینکه event فقط در **user gesture** (کلیک) قابل استفاده‌ست.
+- عدم A/B testing برای پیدا کردن بهترین زمان نمایش.
+
+**📏 نکات حیاتی درباره beforeinstallprompt**
+
+| نکته                              | توضیح                                              |
+|-----------------------------------|----------------------------------------------------|
+| فقط یک‌بار fire میشه              | باید event رو در state ذخیره کنی                   |
+| نیاز به `e.preventDefault()` داره | وگرنه بنر پیش‌فرض مرورگر هم نشون داده میشه         |
+| فقط در user gesture کار می‌کنه    | `prompt()` باید در response به کلیک کاربر صدا زده بشه |
+| فقط در HTTPS کار می‌کنه           | مثل همه‌ی قابلیت‌های PWA                           |
+| مرورگر تصمیم می‌گیره کی fire بشه  | معمولاً بعد از چند دقیقه تعامل کاربر                |
+| بعد از رد شدن، دوباره fire نمیشه  | مگر اینکه کاربر cache رو پاک کنه                   |
+
+**🛠️ راه‌حل سریع در کد**
+
+### ۱. هوک کامل و حرفه‌ای
+
+```jsx
+// hooks/useInstallPrompt.js
+import { useState, useEffect, useCallback } from 'react';
+
+export function useInstallPrompt() {
+  const [deferredPrompt, setDeferredPrompt] = useState(null);
+  const [isInstallable, setIsInstallable] = useState(false);
+  const [isInstalled, setIsInstalled] = useState(false);
+  const [userChoice, setUserChoice] = useState(null); // 'accepted' | 'dismissed' | null
+
+  useEffect(() => {
+    // ✅ بررسی ۱: آیا قبلاً در حالت standalone اجرا میشه؟
+    const isStandalone = window.matchMedia('(display-mode: standalone)').matches;
+    const isIOSStandalone = window.navigator.standalone === true;
+    
+    if (isStandalone || isIOSStandalone) {
+      setIsInstalled(true);
+      return;
+    }
+
+    // ✅ بررسی ۲: آیا قبلاً در localStorage علامت‌گذاری شده؟
+    if (localStorage.getItem('app-installed') === 'true') {
+      setIsInstalled(true);
+      return;
+    }
+
+    // ✅ گوش دادن به beforeinstallprompt
+    const handler = (e) => {
+      // ✅ جلوگیری از بنر پیش‌فرض مرورگر
+      e.preventDefault();
+      
+      // ✅ ذخیره‌ی event برای استفاده‌ی بعدی
+      setDeferredPrompt(e);
+      setIsInstallable(true);
+      
+      console.log('📲 beforeinstallprompt fired - ready to show install button');
+    };
+
+    window.addEventListener('beforeinstallprompt', handler);
+
+    // ✅ گوش دادن به نصب موفق
+    const handleInstalled = () => {
+      console.log('✅ App installed successfully');
+      setIsInstalled(true);
+      setIsInstallable(false);
+      setDeferredPrompt(null);
+      localStorage.setItem('app-installed', 'true');
+    };
+
+    window.addEventListener('appinstalled', handleInstalled);
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handler);
+      window.removeEventListener('appinstalled', handleInstalled);
+    };
+  }, []);
+
+  // ✅ نمایش prompt نصب
+  const promptInstall = useCallback(async () => {
+    if (!deferredPrompt) {
+      console.warn('No install prompt available');
+      return null;
+    }
+
+    try {
+      // ✅ نمایش prompt بومی مرورگر
+      deferredPrompt.prompt();
+      
+      // ✅ صبر برای انتخاب کاربر
+      const { outcome } = await deferredPrompt.userChoice;
+      
+      console.log(`User choice: ${outcome}`);
+      setUserChoice(outcome);
+      
+      // ✅ پاک کردن event (فقط یک‌بار قابل استفاده‌ست)
+      setDeferredPrompt(null);
+      
+      if (outcome === 'dismissed') {
+        setIsInstallable(false);
+      }
+      
+      return outcome;
+    } catch (error) {
+      console.error('Install prompt failed:', error);
+      return null;
+    }
+  }, [deferredPrompt]);
+
+  return {
+    isInstallable,
+    isInstalled,
+    userChoice,
+    promptInstall,
+  };
+}
+```
+
+### ۲. زمان‌بندی هوشمند نمایش
+
+```jsx
+// components/SmartInstallBanner.jsx
+import { useState, useEffect } from 'react';
+import { useInstallPrompt } from '@/hooks/useInstallPrompt';
+
+export function SmartInstallBanner() {
+  const { isInstallable, isInstalled, promptInstall } = useInstallPrompt();
+  const [showBanner, setShowBanner] = useState(false);
+  const [interactionCount, setInteractionCount] = useState(0);
+  const [timeOnSite, setTimeOnSite] = useState(0);
+
+  // ✅ شمارش تعاملات کاربر
+  useEffect(() => {
+    if (isInstalled || !isInstallable) return;
+
+    const trackInteraction = () => {
+      setInteractionCount((prev) => prev + 1);
+    };
+
+    window.addEventListener('click', trackInteraction);
+    window.addEventListener('scroll', trackInteraction, { once: true });
+    
+    return () => {
+      window.removeEventListener('click', trackInteraction);
+    };
+  }, [isInstallable, isInstalled]);
+
+  // ✅ شمارش زمان حضور در سایت
+  useEffect(() => {
+    if (isInstalled || !isInstallable) return;
+
+    const timer = setInterval(() => {
+      setTimeOnSite((prev) => prev + 1);
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [isInstallable, isInstalled]);
+
+  // ✅ تصمیم‌گیری برای نمایش بنر
+  useEffect(() => {
+    if (isInstalled || !isInstallable) return;
+
+    // ✅ استراتژی ۱: بعد از ۳ تعامل
+    if (interactionCount >= 3) {
+      setShowBanner(true);
+      return;
+    }
+
+    // ✅ استراتژی ۲: بعد از ۳۰ ثانیه
+    if (timeOnSite >= 30) {
+      setShowBanner(true);
+      return;
+    }
+
+    // ✅ استراتژی ۳: بعد از اسکرول تا ۵۰٪ صفحه
+    const handleScroll = () => {
+      const scrollPercent = (window.scrollY / (document.body.scrollHeight - window.innerHeight)) * 100;
+      if (scrollPercent >= 50) {
+        setShowBanner(true);
+      }
+    };
+
+    window.addEventListener('scroll', handleScroll);
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, [isInstallable, isInstalled, interactionCount, timeOnSite]);
+
+  if (!showBanner || isInstalled || !isInstallable) return null;
+
+  return (
+    <div 
+      role="dialog"
+      aria-label="پیشنهاد نصب اپلیکیشن"
+      className="fixed bottom-4 left-4 right-4 md:left-auto md:right-4 md:w-96 
+                 bg-white border border-gray-200 rounded-xl shadow-2xl p-5 z-50
+                 animate-slide-up"
+    >
+      <div className="flex items-start gap-4">
+        {/* ✅ آیکون اپ */}
+        <img 
+          src="/icons/icon-192.png" 
+          alt="لوگو اپ"
+          className="w-14 h-14 rounded-xl flex-shrink-0"
+        />
+
+        <div className="flex-1">
+          <h3 className="font-bold text-gray-900 mb-1">
+            نصب اپلیکیشن فروشگاه
+          </h3>
+          <p className="text-sm text-gray-600 mb-3">
+            برای دسترسی سریع‌تر و تجربه‌ی بهتر، اپ رو روی دستگاهت نصب کن.
+          </p>
+
+          <div className="flex gap-2">
+            <button
+              onClick={promptInstall}
+              className="flex-1 bg-blue-600 text-white px-4 py-2 rounded-lg 
+                         hover:bg-blue-700 transition-colors font-medium text-sm"
+            >
+              نصب
+            </button>
+            <button
+              onClick={() => setShowBanner(false)}
+              className="px-4 py-2 text-gray-600 hover:text-gray-800 text-sm"
+              aria-label="بستن"
+            >
+              بعداً
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+```
+
+### ۳. دکمه‌ی نصب در هدر (همیشگی)
+
+```jsx
+// components/InstallButton.jsx
+import { useInstallPrompt } from '@/hooks/useInstallPrompt';
+
+export function InstallButton() {
+  const { isInstallable, isInstalled, promptInstall } = useInstallPrompt();
+
+  // ✅ فقط وقتی قابل نصبه و نصب نشده
+  if (!isInstallable || isInstalled) return null;
+
+  return (
+    <button
+      onClick={promptInstall}
+      className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 
+                 rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium"
+      aria-label="نصب اپلیکیشن"
+    >
+      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} 
+              d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+      </svg>
+      نصب اپ
+    </button>
+  );
+}
+```
+
+### ۴. نمایش بعد از اکشن مهم (مثل خرید)
+
+```jsx
+// components/PostPurchaseInstall.jsx
+import { useState } from 'react';
+import { useInstallPrompt } from '@/hooks/useInstallPrompt';
+
+export function PostPurchaseInstall() {
+  const { isInstallable, isInstalled, promptInstall } = useInstallPrompt();
+  const [showPrompt, setShowPrompt] = useState(false);
+
+  // ✅ بعد از خرید موفق، prompt رو نشون بده
+  const handlePurchaseSuccess = () => {
+    if (isInstallable && !isInstalled) {
+      setShowPrompt(true);
+    }
+  };
+
+  if (!showPrompt || isInstalled) return null;
+
+  return (
+    <div className="bg-gradient-to-r from-green-500 to-blue-600 text-white p-6 rounded-xl">
+      <h3 className="text-xl font-bold mb-2">🎉 خرید با موفقیت انجام شد!</h3>
+      <p className="text-sm opacity-90 mb-4">
+        برای پیگیری سفارش و دسترسی سریع، اپ رو نصب کن.
+      </p>
+      <div className="flex gap-2">
+        <button
+          onClick={promptInstall}
+          className="bg-white text-blue-600 px-6 py-2 rounded-lg font-medium hover:bg-gray-100"
+        >
+          نصب اپ
+        </button>
+        <button
+          onClick={() => setShowPrompt(false)}
+          className="px-6 py-2 text-white opacity-80 hover:opacity-100"
+        >
+          بعداً
+        </button>
+      </div>
+    </div>
+  );
+}
+```
+
+### ۵. A/B Testing برای زمان نمایش
+
+```jsx
+// hooks/useInstallABTest.js
+import { useState, useEffect } from 'react';
+import { useInstallPrompt } from './useInstallPrompt';
+
+export function useInstallABTest() {
+  const { isInstallable, isInstalled, promptInstall } = useInstallPrompt();
+  const [variant, setVariant] = useState(null); // A | B | C
+  const [showPrompt, setShowPrompt] = useState(false);
+
+  useEffect(() => {
+    if (isInstalled || !isInstallable) return;
+
+    // ✅ تخصیص تصادفی به variant
+    const storedVariant = localStorage.getItem('install-variant');
+    const assignedVariant = storedVariant || ['A', 'B', 'C'][Math.floor(Math.random() * 3)];
+    
+    if (!storedVariant) {
+      localStorage.setItem('install-variant', assignedVariant);
+    }
+    
+    setVariant(assignedVariant);
+
+    // ✅ استراتژی‌های مختلف
+    const strategies = {
+      A: { delay: 5000 },      // بعد از ۵ ثانیه
+      B: { interactions: 2 },  // بعد از ۲ تعامل
+      C: { scrollPercent: 30 }, // بعد از ۳۰٪ اسکرول
+    };
+
+    const strategy = strategies[assignedVariant];
+
+    if (strategy.delay) {
+      const timer = setTimeout(() => setShowPrompt(true), strategy.delay);
+      return () => clearTimeout(timer);
+    }
+
+    if (strategy.interactions) {
+      let count = 0;
+      const handler = () => {
+        count++;
+        if (count >= strategy.interactions) {
+          setShowPrompt(true);
+        }
+      };
+      window.addEventListener('click', handler);
+      return () => window.removeEventListener('click', handler);
+    }
+
+    if (strategy.scrollPercent) {
+      const handler = () => {
+        const percent = (window.scrollY / (document.body.scrollHeight - window.innerHeight)) * 100;
+        if (percent >= strategy.scrollPercent) {
+          setShowPrompt(true);
+        }
+      };
+      window.addEventListener('scroll', handler);
+      return () => window.removeEventListener('scroll', handler);
+    }
+  }, [isInstallable, isInstalled]);
+
+  return { variant, showPrompt, promptInstall, isInstallable, isInstalled };
+}
+```
+
+### ۶. CSS برای انیمیشن
+
+```css
+/* ✅ انیمیشن ورود بنر */
+@keyframes slide-up {
+  from {
+    transform: translateY(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.animate-slide-up {
+  animation: slide-up 0.3s ease-out;
+}
+
+/* ✅ مخفی کردن در حالت standalone */
+@media (display-mode: standalone) {
+  .install-button,
+  .install-banner {
+    display: none !important;
+  }
+}
+```
+
+### ۷. ردیابی در Analytics
+
+```jsx
+// hooks/useInstallAnalytics.js
+import { useEffect } from 'react';
+import { useInstallPrompt } from './useInstallPrompt';
+
+export function useInstallAnalytics() {
+  const { isInstallable, isInstalled, userChoice } = useInstallPrompt();
+
+  useEffect(() => {
+    if (userChoice && typeof gtag !== 'undefined') {
+      gtag('event', 'install_prompt_response', {
+        outcome: userChoice, // accepted | dismissed
+        timestamp: Date.now(),
+      });
+    }
+  }, [userChoice]);
+
+  useEffect(() => {
+    if (isInstalled && typeof gtag !== 'undefined') {
+      gtag('event', 'app_installed', {
+        timestamp: Date.now(),
+      });
+    }
+  }, [isInstalled]);
+}
+```
+
+**🔗 ابزار تست**
+
+- **Chrome DevTools** → Application → Manifest → دکمه‌ی "Install app" (حتی روی دسکتاپ).
+- **DevTools** → Application → Service Workers → "Bypass for network" رو غیرفعال کن.
+- **Console**: برای دیدن لاگ‌های `beforeinstallprompt`.
+- **Lighthouse** → PWA → "Is configured for a custom install prompt".
+- **Incognito Mode**: برای تست از اول.
+- **تست واقعی**: روی موبایل اندروید با Chrome تست کن.
+
+**⚠️ چک‌لیست نهایی**
+
+- [ ] `e.preventDefault()` در handler صدا زده شده؟
+- [ ] event در state ذخیره شده؟
+- [ ] `prompt()` فقط در user gesture (کلیک) صدا زده میشه؟
+- [ ] به `appinstalled` event گوش میدی؟
+- [ ] `userChoice` برای Analytics ثبت میشه؟
+- [ ] دکمه‌ی نصب بعد از نصب مخفی میشه؟
+- [ ] در حالت standalone دکمه نشون داده نمیشه؟
+- [ ] زمان‌بندی هوشمند برای نمایش داری؟
+- [ ] Fallback برای iOS داری (Add to Home Screen guide)؟
+- [ ] در Chrome Android واقعی تست کردی؟
+- [ ] در Chrome Desktop واقعی تست کردی؟
+- [ ] Analytics برای install prompt داری؟
+
+> **قانون ۳ ثانیه‌ای:** سایت رو باز کن. آیا دکمه‌ی نصب بلافاصله پرید تو صورتت؟ اگه بله، داری کاربر رو فراری میدی! بذار اول ارزش سایتت رو ببینه، بعد (مثلاً بعد از ۳ کلیک یا ۳۰ ثانیه) دکمه‌ی نصب رو نشون بده. بعد DevTools → Application رو باز کن؛ آیا `beforeinstallprompt` در Console لاگ شده؟ اگه نه، یعنی event رو درست گوش نمی‌دی!
