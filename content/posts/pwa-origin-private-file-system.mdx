@@ -1,0 +1,815 @@
+---
+title: "PWA: Origin Private File System (OPFS) - فایل سیستم خصوصی در مرورگر"
+date: '2026-10-01'
+playlist: 'PWA - برنامه وب پیشرونده'
+tags: ['PWA', 'OPFS', 'Origin-Private-File-System', 'Storage', 'FileSystem', 'SQLite', 'React', 'Performance']
+description: "چطور با Origin Private File System به یه فایل سیستم خصوصی و فوق‌سریع در مرورگر دسترسی داشته باشیم، فایل‌ها رو بخونیم/بنویسیم و حتی SQLite رو در مرورگر اجرا کنیم."
+enableComment: true
+---
+
+# 🗄️ PWA: Origin Private File System (OPFS) - فایل سیستم خصوصی در مرورگر
+
+**💡 مفهوم کلیدی**  
+Origin Private File System (OPFS) یه **فایل سیستم مجازی خصوصی** هست که هر origin (دامنه) در مرورگر بهش دسترسی داره. برخلاف File System Access API که با فایل‌های واقعی کاربر کار می‌کنه، OPFS کاملاً **مجازی و ایزوله** هست - کاربر فایل‌ها رو نمی‌بینه، ولی اپ شما می‌تونه با سرعت بالا فایل بسازه، بخونه و بنویسه.
+
+**کاربردهای اصلی:**
+- اجرای **SQLite در مرورگر** (با WASM)
+- ذخیره‌ی **فایل‌های بزرگ** (ویدیو، دیتاست)
+- **پردازش داده** در Service Worker
+- **Cache پیشرفته** برای اپ‌های آفلاین
+- **دیتابیس‌های embedded** بدون سرور
+
+**⚠️ دام رایج**  
+- اشتباه گرفتن OPFS با File System Access API (این دو کاملاً متفاوتن!).
+- فراموش کردن اینکه OPFS فقط از طریق `navigator.storage.getDirectory()` قابل دسترسیه.
+- عدم استفاده از `createSyncAccessHandle()` برای عملکرد بالا (فقط در Worker!).
+- فراموش کردن `flush()` بعد از نوشتن (داده‌ها ممکنه از دست برن!).
+- عدم مدیریت `QuotaExceededError`.
+- نادیده گرفتن اینکه `SyncAccessHandle` فقط در **Web Worker** کار می‌کنه.
+- عدم بررسی پشتیبانی مرورگر.
+
+**📏 وضعیت پشتیبانی مرورگرها**
+
+| قابلیت                    | Chrome | Edge | Firefox | Safari | iOS Safari |
+|---------------------------|--------|------|---------|--------|------------|
+| OPFS (Async)              | ✅ 102+| ✅   | ✅ 111+ | ✅ 15.2+| ✅ 15.2+  |
+| SyncAccessHandle          | ✅ 102+| ✅   | ✅ 111+ | ✅ 15.2+| ✅ 15.2+  |
+| createWritable (OPFS)     | ✅ 102+| ✅   | ✅ 111+ | ❌     | ❌         |
+
+> ⚠️ **نکته حیاتی**: `SyncAccessHandle` (سریع‌ترین روش) فقط در **Web Worker** یا **Service Worker** کار می‌کنه، نه در main thread!
+
+**📏 مقایسه با سایر روش‌های ذخیره‌سازی**
+
+| ویژگی              | LocalStorage | IndexedDB | File System Access | OPFS              |
+|--------------------|--------------|-----------|--------------------|--------------------|
+| ظرفیت              | ۵-۱۰ MB      | صدها MB   | نامحدود            | صدها MB تا GB     |
+| سرعت               | ⚡            | ⚡⚡       | ⚡⚡                | ⚡⚡⚡ (سریع‌ترین) |
+| نوع داده           | string       | هر object | File/Directory     | File/Directory     |
+| دسترسی کاربر       | ❌           | ❌        | ✅ (فایل واقعی)    | ❌ (مجازی)         |
+| در Worker          | ❌           | ✅        | ❌                 | ✅                 |
+| Sync Access        | ✅           | ❌        | ❌                 | ✅ (در Worker)     |
+| مناسب برای         | تنظیمات      | داده ساختاری | ویرایش فایل     | SQLite، فایل بزرگ  |
+
+---
+
+## 🚀 بخش اول: شروع کار با OPFS
+
+### ۱. دسترسی به ریشه‌ی OPFS
+
+```js
+// ✅ دسترسی به ریشه‌ی فایل سیستم خصوصی
+async function getOPFSRoot() {
+  const root = await navigator.storage.getDirectory();
+  return root;
+}
+
+// ✅ بررسی پشتیبانی
+function isOPFSSupported() {
+  return 'storage' in navigator && 'getDirectory' in navigator.storage;
+}
+```
+
+### ۲. هوک React برای OPFS
+
+```jsx
+// hooks/useOPFS.js
+import { useState, useCallback, useEffect } from 'react';
+
+export function useOPFS() {
+  const [isSupported, setIsSupported] = useState(false);
+  const [root, setRoot] = useState(null);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    const init = async () => {
+      if (!isOPFSSupported()) {
+        setIsSupported(false);
+        return;
+      }
+
+      try {
+        setIsSupported(true);
+        const dir = await navigator.storage.getDirectory();
+        setRoot(dir);
+      } catch (err) {
+        setError(err.message);
+      }
+    };
+
+    init();
+  }, []);
+
+  // ✅ نوشتن فایل
+  const writeFile = useCallback(async (path, content) => {
+    if (!root) return false;
+
+    try {
+      setError(null);
+      const fileHandle = await root.getFileHandle(path, { create: true });
+      const writable = await fileHandle.createWritable();
+      await writable.write(content);
+      await writable.close();
+      return true;
+    } catch (err) {
+      setError(err.message);
+      return false;
+    }
+  }, [root]);
+
+  // ✅ خواندن فایل
+  const readFile = useCallback(async (path) => {
+    if (!root) return null;
+
+    try {
+      setError(null);
+      const fileHandle = await root.getFileHandle(path);
+      const file = await fileHandle.getFile();
+      const text = await file.text();
+      return text;
+    } catch (err) {
+      if (err.name === 'NotFoundError') {
+        return null;
+      }
+      setError(err.message);
+      return null;
+    }
+  }, [root]);
+
+  // ✅ حذف فایل
+  const deleteFile = useCallback(async (path) => {
+    if (!root) return false;
+
+    try {
+      await root.removeEntry(path);
+      return true;
+    } catch (err) {
+      setError(err.message);
+      return false;
+    }
+  }, [root]);
+
+  // ✅ لیست فایل‌ها
+  const listFiles = useCallback(async () => {
+    if (!root) return [];
+
+    const files = [];
+    for await (const [name, handle] of root) {
+      files.push({
+        name,
+        kind: handle.kind, // 'file' یا 'directory'
+      });
+    }
+    return files;
+  }, [root]);
+
+  // ✅ ساخت پوشه
+  const createDirectory = useCallback(async (path) => {
+    if (!root) return null;
+
+    try {
+      const dirHandle = await root.getDirectoryHandle(path, { create: true });
+      return dirHandle;
+    } catch (err) {
+      setError(err.message);
+      return null;
+    }
+  }, [root]);
+
+  return {
+    isSupported,
+    root,
+    error,
+    writeFile,
+    readFile,
+    deleteFile,
+    listFiles,
+    createDirectory,
+  };
+}
+```
+
+---
+
+## 📝 بخش دوم: عملیات فایل
+
+### ۳. نوشتن و خواندن فایل متنی
+
+```jsx
+// components/OPFSTextEditor.jsx
+import { useState } from 'react';
+import { useOPFS } from '@/hooks/useOPFS';
+
+export function OPFSTextEditor() {
+  const { isSupported, writeFile, readFile, error } = useOPFS();
+  const [content, setContent] = useState('');
+  const [filename, setFilename] = useState('note.txt');
+  const [saved, setSaved] = useState(false);
+
+  const handleSave = async () => {
+    const success = await writeFile(filename, content);
+    if (success) {
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    }
+  };
+
+  const handleLoad = async () => {
+    const text = await readFile(filename);
+    if (text !== null) {
+      setContent(text);
+    } else {
+      alert('فایل پیدا نشد');
+    }
+  };
+
+  if (!isSupported) {
+    return (
+      <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+        <p className="text-sm text-yellow-800">
+          ⚠️ OPFS در این مرورگر پشتیبانی نمیشه.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <h3 className="font-bold text-lg">📝 ویرایشگر OPFS</h3>
+
+      <input
+        type="text"
+        value={filename}
+        onChange={(e) => setFilename(e.target.value)}
+        className="w-full p-2 border border-gray-300 rounded"
+        placeholder="نام فایل"
+      />
+
+      <textarea
+        value={content}
+        onChange={(e) => setContent(e.target.value)}
+        rows={8}
+        className="w-full p-3 border border-gray-300 rounded font-mono text-sm"
+        placeholder="محتوای فایل..."
+      />
+
+      <div className="flex gap-2">
+        <button
+          onClick={handleSave}
+          className="flex-1 bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700"
+        >
+          {saved ? '✅ ذخیره شد' : '💾 ذخیره'}
+        </button>
+        <button
+          onClick={handleLoad}
+          className="flex-1 bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
+        >
+          📂 بارگذاری
+        </button>
+      </div>
+
+      {error && <p className="text-sm text-red-600">{error}</p>}
+    </div>
+  );
+}
+```
+
+### ۴. کار با فایل‌های باینری
+
+```js
+// ✅ نوشتن ArrayBuffer (مثلاً تصویر یا ویدیو)
+async function writeBinaryFile(root, path, arrayBuffer) {
+  const fileHandle = await root.getFileHandle(path, { create: true });
+  const writable = await fileHandle.createWritable();
+  await writable.write(arrayBuffer);
+  await writable.close();
+}
+
+// ✅ خواندن ArrayBuffer
+async function readBinaryFile(root, path) {
+  const fileHandle = await root.getFileHandle(path);
+  const file = await fileHandle.getFile();
+  return await file.arrayBuffer();
+}
+
+// ✅ نوشتن Blob
+async function writeBlob(root, path, blob) {
+  const fileHandle = await root.getFileHandle(path, { create: true });
+  const writable = await fileHandle.createWritable();
+  await writable.write(blob);
+  await writable.close();
+}
+
+// ✅ مثال: ذخیره‌ی تصویر دانلود شده
+async function cacheImage(root, url, filename) {
+  const response = await fetch(url);
+  const blob = await response.blob();
+  await writeBlob(root, filename, blob);
+  console.log(`✅ Image cached: ${filename}`);
+}
+```
+
+### ۵. مدیریت پوشه‌ها
+
+```js
+// ✅ ساخت ساختار پوشه‌ای
+async function setupDirectoryStructure(root) {
+  const dataDir = await root.getDirectoryHandle('data', { create: true });
+  const cacheDir = await root.getDirectoryHandle('cache', { create: true });
+  const dbDir = await root.getDirectoryHandle('databases', { create: true });
+  
+  const imagesDir = await cacheDir.getDirectoryHandle('images', { create: true });
+  const videosDir = await cacheDir.getDirectoryHandle('videos', { create: true });
+
+  console.log('✅ Directory structure created');
+  return { dataDir, cacheDir, dbDir, imagesDir, videosDir };
+}
+
+// ✅ لیست بازگشتی فایل‌ها
+async function listAllFiles(dirHandle, prefix = '') {
+  const files = [];
+  
+  for await (const [name, handle] of dirHandle) {
+    const fullPath = prefix ? `${prefix}/${name}` : name;
+    
+    if (handle.kind === 'file') {
+      const file = await handle.getFile();
+      files.push({
+        path: fullPath,
+        size: file.size,
+        type: file.type,
+        lastModified: file.lastModified,
+      });
+    } else {
+      const subFiles = await listAllFiles(handle, fullPath);
+      files.push(...subFiles);
+    }
+  }
+  
+  return files;
+}
+```
+
+---
+
+## ⚡ بخش سوم: SyncAccessHandle (سریع‌ترین روش)
+
+**💡 مفهوم:**  
+`SyncAccessHandle` یه API **synchronous** برای خواندن/نوشتن فایل‌هاست که **فقط در Web Worker** کار می‌کنه. این سریع‌ترین روش دسترسی به OPFS هست و برای SQLite و پردازش داده‌های بزرگ حیاتیه.
+
+### ۶. Web Worker با SyncAccessHandle
+
+```js
+// workers/opfs-worker.js
+
+// ✅ دریافت پیام از main thread
+self.onmessage = async (event) => {
+  const { type, filename, data } = event.data;
+
+  try {
+    const root = await navigator.storage.getDirectory();
+    const fileHandle = await root.getFileHandle(filename, { create: true });
+
+    // ✅ ساخت SyncAccessHandle (فقط در Worker!)
+    const accessHandle = await fileHandle.createSyncAccessHandle();
+
+    switch (type) {
+      case 'write': {
+        const buffer = new Uint8Array(data);
+        accessHandle.write(buffer, { at: 0 });
+        accessHandle.flush(); // ✅ حیاتی! بدون flush داده‌ها از دست میرن
+        accessHandle.close();
+        self.postMessage({ type: 'success', message: 'File written' });
+        break;
+      }
+
+      case 'read': {
+        const size = accessHandle.getSize();
+        const buffer = new Uint8Array(size);
+        accessHandle.read(buffer, { at: 0 });
+        accessHandle.close();
+        self.postMessage({ type: 'data', buffer: buffer.buffer }, [buffer.buffer]);
+        break;
+      }
+
+      case 'append': {
+        const buffer = new Uint8Array(data);
+        const currentSize = accessHandle.getSize();
+        accessHandle.write(buffer, { at: currentSize });
+        accessHandle.flush();
+        accessHandle.close();
+        self.postMessage({ type: 'success', message: 'Data appended' });
+        break;
+      }
+
+      case 'truncate': {
+        accessHandle.truncate(0);
+        accessHandle.flush();
+        accessHandle.close();
+        self.postMessage({ type: 'success', message: 'File truncated' });
+        break;
+      }
+    }
+  } catch (error) {
+    self.postMessage({ type: 'error', message: error.message });
+  }
+};
+```
+
+### ۷. هوک استفاده از Worker
+
+```jsx
+// hooks/useOPFSWorker.js
+import { useState, useCallback, useEffect, useRef } from 'react';
+
+export function useOPFSWorker() {
+  const workerRef = useRef(null);
+  const [isReady, setIsReady] = useState(false);
+
+  useEffect(() => {
+    const worker = new Worker(new URL('../workers/opfs-worker.js', import.meta.url));
+    workerRef.current = worker;
+    setIsReady(true);
+
+    return () => worker.terminate();
+  }, []);
+
+  const writeFile = useCallback(async (filename, data) => {
+    return new Promise((resolve, reject) => {
+      const worker = workerRef.current;
+      if (!worker) return reject(new Error('Worker not ready'));
+
+      worker.onmessage = (event) => {
+        if (event.data.type === 'success') resolve(true);
+        if (event.data.type === 'error') reject(new Error(event.data.message));
+      };
+
+      worker.postMessage({ type: 'write', filename, data });
+    });
+  }, []);
+
+  const readFile = useCallback(async (filename) => {
+    return new Promise((resolve, reject) => {
+      const worker = workerRef.current;
+      if (!worker) return reject(new Error('Worker not ready'));
+
+      worker.onmessage = (event) => {
+        if (event.data.type === 'data') resolve(event.data.buffer);
+        if (event.data.type === 'error') reject(new Error(event.data.message));
+      };
+
+      worker.postMessage({ type: 'read', filename });
+    });
+  }, []);
+
+  return { isReady, writeFile, readFile };
+}
+```
+
+---
+
+## 🗃️ بخش چهارم: SQLite در مرورگر با OPFS
+
+**💡 مفهوم:**  
+با ترکیب OPFS + WebAssembly + SQLite می‌تونی یه **دیتابیس کامل SQL** در مرورگر داشته باشی - بدون سرور!
+
+### ۸. راه‌اندازی SQLite با OPFS
+
+```js
+// lib/sqlite-opfs.js
+// ✅ با استفاده از sqlite-wasm (از sqlite.org)
+
+import sqlite3InitModule from '@sqlite.org/sqlite-wasm';
+
+let db = null;
+
+export async function initSQLite() {
+  const sqlite3 = await sqlite3InitModule({
+    print: console.log,
+    printErr: console.error,
+  });
+
+  // ✅ باز کردن دیتابیس در OPFS
+  const root = await navigator.storage.getDirectory();
+  
+  db = new sqlite3.oo1.OpfsDb('/my-database.db', 'c');
+  
+  console.log('✅ SQLite initialized on OPFS');
+  return db;
+}
+
+// ✅ ساخت جدول
+export async function createTables() {
+  if (!db) await initSQLite();
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS products (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      price REAL NOT NULL,
+      category TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS orders (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      product_id INTEGER,
+      quantity INTEGER,
+      total REAL,
+      FOREIGN KEY (product_id) REFERENCES products(id)
+    )
+  `);
+
+  console.log('✅ Tables created');
+}
+
+// ✅ درج داده
+export function insertProduct(name, price, category) {
+  db.exec({
+    sql: 'INSERT INTO products (name, price, category) VALUES (?, ?, ?)',
+    bind: [name, price, category],
+  });
+}
+
+// ✅ خواندن داده
+export function getProducts() {
+  const results = [];
+  db.exec({
+    sql: 'SELECT * FROM products ORDER BY created_at DESC',
+    rowMode: 'object',
+    callback: (row) => results.push(row),
+  });
+  return results;
+}
+
+// ✅ جستجو
+export function searchProducts(query) {
+  const results = [];
+  db.exec({
+    sql: 'SELECT * FROM products WHERE name LIKE ? ORDER BY price',
+    bind: [`%${query}%`],
+    rowMode: 'object',
+    callback: (row) => results.push(row),
+  });
+  return results;
+}
+```
+
+### ۹. کامپوننت SQLite Demo
+
+```jsx
+// components/SQLiteDemo.jsx
+import { useState, useEffect } from 'react';
+import { initSQLite, createTables, insertProduct, getProducts } from '@/lib/sqlite-opfs';
+
+export function SQLiteDemo() {
+  const [products, setProducts] = useState([]);
+  const [name, setName] = useState('');
+  const [price, setPrice] = useState('');
+  const [isReady, setIsReady] = useState(false);
+
+  useEffect(() => {
+    const init = async () => {
+      await initSQLite();
+      await createTables();
+      setProducts(getProducts());
+      setIsReady(true);
+    };
+    init();
+  }, []);
+
+  const handleAdd = () => {
+    if (!name || !price) return;
+    insertProduct(name, parseFloat(price), 'general');
+    setProducts(getProducts());
+    setName('');
+    setPrice('');
+  };
+
+  if (!isReady) return <p>در حال راه‌اندازی SQLite...</p>;
+
+  return (
+    <div className="space-y-4">
+      <h3 className="font-bold text-lg">🗃️ SQLite در مرورگر (OPFS)</h3>
+
+      <div className="flex gap-2">
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="نام محصول"
+          className="flex-1 p-2 border rounded"
+        />
+        <input
+          value={price}
+          onChange={(e) => setPrice(e.target.value)}
+          placeholder="قیمت"
+          type="number"
+          className="w-24 p-2 border rounded"
+        />
+        <button
+          onClick={handleAdd}
+          className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700"
+        >
+          افزودن
+        </button>
+      </div>
+
+      <table className="w-full border-collapse">
+        <thead>
+          <tr className="bg-gray-100">
+            <th className="p-2 text-right">نام</th>
+            <th className="p-2 text-right">قیمت</th>
+            <th className="p-2 text-right">تاریخ</th>
+          </tr>
+        </thead>
+        <tbody>
+          {products.map((p) => (
+            <tr key={p.id} className="border-b">
+              <td className="p-2">{p.name}</td>
+              <td className="p-2">{p.price.toLocaleString()} تومان</td>
+              <td className="p-2 text-sm text-gray-500">{p.created_at}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      <p className="text-xs text-gray-500">
+        💡 داده‌ها در OPFS ذخیره شدن و حتی بعد از رفرش باقی می‌مونن.
+      </p>
+    </div>
+  );
+}
+```
+
+---
+
+## 📊 بخش پنجم: مدیریت فضا و Quota
+
+### ۱۰. بررسی فضای استفاده‌شده
+
+```jsx
+// hooks/useStorageQuota.js
+import { useState, useEffect, useCallback } from 'react';
+
+export function useStorageQuota() {
+  const [quota, setQuota] = useState(null);
+
+  const refresh = useCallback(async () => {
+    if (!navigator.storage?.estimate) return;
+
+    const estimate = await navigator.storage.estimate();
+    setQuota({
+      usage: estimate.usage,
+      quota: estimate.quota,
+      usageMB: (estimate.usage / 1024 / 1024).toFixed(2),
+      quotaMB: (estimate.quota / 1024 / 1024).toFixed(2),
+      percent: ((estimate.usage / estimate.quota) * 100).toFixed(1),
+    });
+  }, []);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  return { quota, refresh };
+}
+
+// ✅ کامپوننت نمایش فضا
+export function StorageQuotaBar() {
+  const { quota } = useStorageQuota();
+
+  if (!quota) return null;
+
+  return (
+    <div className="p-4 bg-gray-50 rounded-lg space-y-2">
+      <div className="flex justify-between text-sm">
+        <span>فضای OPFS و Storage:</span>
+        <span>{quota.usageMB} MB / {quota.quotaMB} MB</span>
+      </div>
+      <div className="w-full bg-gray-200 rounded-full h-3">
+        <div
+          className={`h-3 rounded-full transition-all ${
+            parseFloat(quota.percent) > 80 ? 'bg-red-500' : 'bg-blue-500'
+          }`}
+          style={{ width: `${quota.percent}%` }}
+        />
+      </div>
+      <p className="text-xs text-gray-500">{quota.percent}% استفاده شده</p>
+    </div>
+  );
+}
+```
+
+### ۱۱. درخواست فضای بیشتر
+
+```js
+// ✅ درخواست persistent storage (مرورگر ممکنه OPFS رو پاک نکنه)
+async function requestPersistentStorage() {
+  if (!navigator.storage?.persist) return false;
+
+  const isPersisted = await navigator.storage.persist();
+  console.log(`Persistent storage: ${isPersisted ? '✅ granted' : '❌ denied'}`);
+  return isPersisted;
+}
+
+// ✅ پاک کردن OPFS
+async function clearOPFS() {
+  const root = await navigator.storage.getDirectory();
+  
+  for await (const [name] of root) {
+    await root.removeEntry(name, { recursive: true });
+  }
+  
+  console.log('✅ OPFS cleared');
+}
+```
+
+---
+
+## 🔄 بخش ششم: Fallback
+
+### ۱۲. Fallback به IndexedDB
+
+```jsx
+// hooks/useFileStorage.js
+import { useState, useEffect } from 'react';
+
+export function useFileStorage() {
+  const [backend, setBackend] = useState('none'); // opfs | indexeddb | memory
+
+  useEffect(() => {
+    if ('storage' in navigator && 'getDirectory' in navigator.storage) {
+      setBackend('opfs');
+    } else if ('indexedDB' in window) {
+      setBackend('indexeddb');
+    } else {
+      setBackend('memory');
+    }
+  }, []);
+
+  const writeFile = async (path, content) => {
+    if (backend === 'opfs') {
+      const root = await navigator.storage.getDirectory();
+      const handle = await root.getFileHandle(path, { create: true });
+      const writable = await handle.createWritable();
+      await writable.write(content);
+      await writable.close();
+    } else if (backend === 'indexeddb') {
+      // ✅ Fallback به IndexedDB
+      const db = await openDB('file-storage', 1, {
+        upgrade(db) {
+          db.createObjectStore('files');
+        },
+      });
+      await db.put('files', content, path);
+    } else {
+      // ✅ Fallback به memory
+      window.__memoryStorage = window.__memoryStorage || {};
+      window.__memoryStorage[path] = content;
+    }
+  };
+
+  const readFile = async (path) => {
+    if (backend === 'opfs') {
+      const root = await navigator.storage.getDirectory();
+      const handle = await root.getFileHandle(path);
+      const file = await handle.getFile();
+      return await file.text();
+    } else if (backend === 'indexeddb') {
+      const db = await openDB('file-storage', 1);
+      return await db.get('files', path);
+    } else {
+      return window.__memoryStorage?.[path] || null;
+    }
+  };
+
+  return { backend, writeFile, readFile };
+}
+```
+
+---
+
+**🔗 ابزار تست**
+
+- **Chrome DevTools** → Application → Storage → File System (مشاهده OPFS).
+- **DevTools** → Application → Storage → Clear site data (پاک کردن OPFS).
+- **Console**: `navigator.storage.getDirectory().then(d => console.log(d))`.
+- **Console**: `navigator.storage.estimate()` برای بررسی فضا.
+- **sqlite-wasm**: [sqlite.org/wasm](https://sqlite.org/wasm) برای تست SQLite.
+- **OPFS Explorer**: افزونه Chrome برای مرور فایل‌های OPFS.
+
+**⚠️ چک‌لیست نهایی**
+
+- [ ] بررسی `navigator.storage.getDirectory` قبل از استفاده؟
+- [ ] استفاده از `createSyncAccessHandle` فقط در Worker؟
+- [ ] `flush()` بعد از هر نوشتن با SyncAccessHandle؟
+- [ ] `close()` بعد از اتمام کار با AccessHandle؟
+- [ ] مدیریت `QuotaExceededError`؟
+- [ ] درخواست `navigator.storage.persist()`؟
+- [ ] Fallback برای مرورگرهای قدیمی؟
+- [ ] تست در Chrome، Firefox و Safari؟
+- [ ] تست در Worker (نه main thread) برای SyncAccessHandle؟
+- [ ] پاک کردن فایل‌های غیرضروری؟
+
+> **قانون ۳ ثانیه‌ای:** Console رو باز کن و بنویس `navigator.storage.getDirectory()`. اگه Promise برگردوند، یعنی OPFS پشتیبانی میشه. بعد بنویس `const root = await navigator.storage.getDirectory(); const f = await root.getFileHandle('test.txt', {create: true}); const w = await f.createWritable(); await w.write('hello'); await w.close();`. بعد `const file = await (await root.getFileHandle('test.txt')).getFile(); console.log(await file.text())` باید `hello` چاپ کنه. اگه خطا داد، یعنی OPFS کار نمی‌کنه!

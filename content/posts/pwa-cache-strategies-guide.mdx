@@ -1,0 +1,791 @@
+---
+title: "PWA: استراتژی‌های Cache در Service Worker (راهنمای کامل)"
+date: '2026-10-01'
+playlist: 'PWA - برنامه وب پیشرونده'
+tags: ['PWA', 'Cache-Strategies', 'Service-Worker', 'Offline', 'Performance', 'React']
+description: "راهنمای کامل استراتژی‌های cache در Service Worker: Cache Only، Network Only، Cache First، Network First، Stale While Revalidate و Cache Network Update - کدوم رو کجا استفاده کنیم؟"
+enableComment: true
+---
+
+# 🗂️ PWA: استراتژی‌های Cache در Service Worker (راهنمای کامل)
+
+**💡 مفهوم کلیدی**  
+استراتژی cache تعیین می‌کنه که **چطور و از کجا** داده‌ها لود بشن. انتخاب استراتژی درست، تفاوت بین یه PWA سریع و آفلاین با یه سایت معمولی کند و غیرقابل استفاده‌ست. هر استراتژی برای نوع خاصی از داده مناسبه.
+
+**⚠️ دام رایج**  
+- استفاده از یک استراتژی برای همه‌چیز (مثلاً Cache First برای APIها → داده‌های قدیمی!).
+- فراموش کردن cleanup cache قدیمی.
+- عدم استفاده از version در نام cache.
+- عدم مدیریت خطا در network fallback.
+- فراموش کردن `clone()` قبل از cache کردن response.
+- عدم تست حالت آفلاین.
+
+**📏 جدول مقایسه استراتژی‌ها**
+
+| استراتژی                      | سرعت | آفلاین | تازگی داده | مناسب برای                    |
+|-------------------------------|-------|---------|-------------|--------------------------------|
+| Cache Only                    | ⚡⚡⚡ | ✅      | ❌          | Assets ثابت (CSS, JS, fonts)  |
+| Network Only                  | ⚡    | ❌      | ✅          | APIهای real-time، auth        |
+| Cache First, Network Fallback | ⚡⚡⚡ | ✅      | ⚠️          | تصاویر، فونت‌ها، assets       |
+| Network First, Cache Fallback | ⚡⚡   | ✅      | ✅          | APIها، صفحات HTML             |
+| Stale While Revalidate        | ⚡⚡⚡ | ✅      | ⚠️→✅       | داده‌های نیمه‌پویا             |
+| Cache, Network Update, Cache  | ⚡⚡   | ✅      | ✅          | داده‌های حساس، مالی           |
+
+---
+
+## 📊 بخش اول: مقایسه بصری
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Cache Only              │  Network Only                     │
+│  ┌─────┐                 │  ┌─────┐  ┌─────┐               │
+│  │Cache│ → Response      │  │Net  │ → Response             │
+│  └─────┘                 │  └─────┘  └─────┘               │
+├─────────────────────────────────────────────────────────────┤
+│  Cache First             │  Network First                    │
+│  ┌─────┐  ┌─────┐       │  ┌─────┐  ┌─────┐               │
+│  │Cache│→│Net  │→Resp   │  │Net  │→│Cache│→Resp            │
+│  └─────┘  └─────┘       │  └─────┘  └─────┘               │
+│   (miss)   (fallback)   │   (fail)   (fallback)            │
+├─────────────────────────────────────────────────────────────┤
+│  Stale While Revalidate  │  Cache, Network Update, Cache    │
+│  ┌─────┐  ┌─────┐       │  ┌─────┐  ┌─────┐  ┌─────┐     │
+│  │Cache│→│Resp │        │  │Cache│→│Net  │→│Cache│→Resp   │
+│  └─────┘  └─────┘       │  └─────┘  └─────┘  └─────┘     │
+│           ┌─────┐       │                                   │
+│           │Net  │→Cache │                                   │
+│           └─────┘       │                                   │
+│         (background)    │                                   │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 🚀 بخش دوم: پیاده‌سازی استراتژی‌ها
+
+### ۱. Cache Only (فقط از cache)
+
+```js
+// public/sw.js
+
+// ✅ مناسب برای: assets ثابت که تغییر نمی‌کنن
+// مثال: CSS، JS bundles، فونت‌ها، آیکون‌ها
+
+self.addEventListener('fetch', (event) => {
+  if (event.request.url.endsWith('.css') || 
+      event.request.url.endsWith('.js') ||
+      event.request.url.includes('/fonts/')) {
+    
+    event.respondWith(
+      (async () => {
+        const cache = await caches.open('static-assets-v1');
+        const cached = await cache.match(event.request);
+        
+        if (cached) {
+          return cached;
+        }
+        
+        // اگه تو cache نبود، از شبکه بگیر و cache کن
+        const response = await fetch(event.request);
+        await cache.put(event.request, response.clone());
+        return response;
+      })()
+    );
+  }
+});
+```
+
+**✅ مزایا:**
+- سریع‌ترین سرعت (بدون network request)
+- همیشه آفلاین کار می‌کنه
+- مصرف داده کم
+
+**❌ معایب:**
+- داده‌های قدیمی (تا وقتی cache آپدیت نشه)
+- نیاز به versioning برای آپدیت
+
+---
+
+### ۲. Network Only (فقط از شبکه)
+
+```js
+// public/sw.js
+
+// ✅ مناسب برای: APIهای real-time، auth، داده‌های حساس
+// مثال: balance، messages، user profile
+
+self.addEventListener('fetch', (event) => {
+  if (event.request.url.includes('/api/auth') ||
+      event.request.url.includes('/api/balance')) {
+    
+    event.respondWith(
+      fetch(event.request)
+        .catch(() => {
+          // ✅ fallback به صفحه خطا
+          return new Response(
+            JSON.stringify({ error: 'Network error' }),
+            { headers: { 'Content-Type': 'application/json' } }
+          );
+        })
+    );
+  }
+});
+```
+
+**✅ مزایا:**
+- همیشه داده‌های تازه
+- مناسب برای داده‌های حساس
+
+**❌ معایب:**
+- آفلاین کار نمی‌کنه
+- کندتر (همیشه network request)
+- مصرف داده بیشتر
+
+---
+
+### ۳. Cache First, Network Fallback (اول cache)
+
+```js
+// public/sw.js
+
+// ✅ مناسب برای: تصاویر، فونت‌ها، assets غیرحیاتی
+// مثال: product images، blog images
+
+self.addEventListener('fetch', (event) => {
+  if (event.request.url.includes('/images/') ||
+      event.request.destination === 'image') {
+    
+    event.respondWith(
+      (async () => {
+        const cache = await caches.open('images-v1');
+        const cached = await cache.match(event.request);
+        
+        // ✅ اگه تو cache بود، برگردون
+        if (cached) {
+          return cached;
+        }
+        
+        // ✅ اگه نبود، از شبکه بگیر و cache کن
+        try {
+          const response = await fetch(event.request);
+          
+          if (response.ok) {
+            await cache.put(event.request, response.clone());
+          }
+          
+          return response;
+        } catch (error) {
+          // ✅ fallback به placeholder image
+          return caches.match('/placeholder.png');
+        }
+      })()
+    );
+  }
+});
+```
+
+**✅ مزایا:**
+- سریع (اگه cache hit باشه)
+- آفلاین کار می‌کنه
+- مصرف داده کم بعد از اولین لود
+
+**❌ معایب:**
+- داده‌های قدیمی (تا وقتی cache آپدیت نشه)
+- مناسب برای داده‌های غیرحیاتی
+
+---
+
+### ۴. Network First, Cache Fallback (اول شبکه)
+
+```js
+// public/sw.js
+
+// ✅ مناسب برای: APIها، صفحات HTML، داده‌های پویا
+// مثال: product list، user data، pages
+
+self.addEventListener('fetch', (event) => {
+  if (event.request.url.includes('/api/') ||
+      event.request.mode === 'navigate') {
+    
+    event.respondWith(
+      (async () => {
+        const cache = await caches.open('api-cache-v1');
+        
+        try {
+          // ✅ اول از شبکه بگیر
+          const response = await fetch(event.request);
+          
+          // ✅ اگه موفق بود، cache رو آپدیت کن
+          if (response.ok) {
+            await cache.put(event.request, response.clone());
+          }
+          
+          return response;
+        } catch (error) {
+          // ✅ اگه شبکه قطع بود، از cache بخون
+          const cached = await cache.match(event.request);
+          
+          if (cached) {
+            return cached;
+          }
+          
+          // ✅ اگه تو cache هم نبود، صفحه آفلاین
+          if (event.request.mode === 'navigate') {
+            return caches.match('/offline.html');
+          }
+          
+          throw error;
+        }
+      })()
+    );
+  }
+});
+```
+
+**✅ مزایا:**
+- همیشه داده‌های تازه (اگه آنلاین باشه)
+- آفلاین کار می‌کنه (با cache fallback)
+- مناسب برای APIها
+
+**❌ معایب:**
+- کندتر از Cache First (چون اول شبکه رو چک می‌کنه)
+- نیاز به مدیریت timeout
+
+---
+
+### ۵. Stale While Revalidate (اول cache، بعد آپدیت)
+
+```js
+// public/sw.js
+
+// ✅ مناسب برای: داده‌های نیمه‌پویا
+// مثال: news feed، social media posts، product list
+
+self.addEventListener('fetch', (event) => {
+  if (event.request.url.includes('/api/feed') ||
+      event.request.url.includes('/api/products')) {
+    
+    event.respondWith(
+      (async () => {
+        const cache = await caches.open('dynamic-cache-v1');
+        const cached = await cache.match(event.request);
+        
+        // ✅ در پس‌زمینه، از شبکه بگیر و cache رو آپدیت کن
+        const fetchPromise = fetch(event.request)
+          .then((response) => {
+            if (response.ok) {
+              cache.put(event.request, response.clone());
+            }
+            return response;
+          })
+          .catch(() => {
+            console.log('Network failed, using cache');
+          });
+        
+        // ✅ اگه cache داشت، همون رو برگردون (سریع!)
+        if (cached) {
+          return cached;
+        }
+        
+        // ✅ اگه cache نداشت، صبر کن تا شبکه جواب بده
+        return fetchPromise;
+      })()
+    );
+  }
+});
+```
+
+**✅ مزایا:**
+- سریع‌ترین سرعت (همیشه cache رو نشون میده)
+- در پس‌زمینه آپدیت میشه
+- آفلاین کار می‌کنه
+
+**❌ معایب:**
+- کاربر همیشه داده‌های یه نسخه قدیمی‌تر می‌بینه
+- مناسب برای داده‌هایی که آپدیت فوری لازم ندارن
+
+---
+
+### ۶. Cache, Network Update, Cache (ترکیبی)
+
+```js
+// public/sw.js
+
+// ✅ مناسب برای: داده‌های حساس، مالی، مهم
+// مثال: stock prices، exchange rates، inventory
+
+self.addEventListener('fetch', (event) => {
+  if (event.request.url.includes('/api/stock') ||
+      event.request.url.includes('/api/inventory')) {
+    
+    event.respondWith(
+      (async () => {
+        const cache = await caches.open('sensitive-cache-v1');
+        const cached = await cache.match(event.request);
+        
+        try {
+          // ✅ از شبکه بگیر
+          const response = await fetch(event.request);
+          
+          if (response.ok) {
+            // ✅ cache رو آپدیت کن
+            await cache.put(event.request, response.clone());
+            return response;
+          }
+          
+          // ✅ اگه شبکه خطا داد، از cache برگردون
+          if (cached) {
+            return cached;
+          }
+          
+          throw new Error('Network failed and no cache');
+        } catch (error) {
+          // ✅ fallback به cache
+          if (cached) {
+            // ✅ اضافه کردن header برای نشون دادن داده قدیمی
+            const headers = new Headers(cached.headers);
+            headers.append('X-From-Cache', 'true');
+            headers.append('X-Cache-Time', new Date().toISOString());
+            
+            return new Response(cached.body, {
+              status: cached.status,
+              statusText: cached.statusText,
+              headers,
+            });
+          }
+          
+          throw error;
+        }
+      })()
+    );
+  }
+});
+```
+
+**✅ مزایا:**
+- همیشه داده‌های تازه (اگه آنلاین باشه)
+- آفلاین کار می‌کنه
+- مناسب برای داده‌های حساس
+
+**❌ معایب:**
+- کندتر از Stale While Revalidate
+- مصرف داده بیشتر
+
+---
+
+## 🎯 بخش سوم: Service Worker کامل با همه‌ی استراتژی‌ها
+
+```js
+// public/sw.js
+
+const CACHE_VERSION = 'v2';
+const STATIC_CACHE = `static-${CACHE_VERSION}`;
+const IMAGES_CACHE = `images-${CACHE_VERSION}`;
+const API_CACHE = `api-${CACHE_VERSION}`;
+const DYNAMIC_CACHE = `dynamic-${CACHE_VERSION}`;
+
+// ✅ لیست assets برای precache
+const PRECACHE_ASSETS = [
+  '/',
+  '/offline.html',
+  '/styles.css',
+  '/app.js',
+  '/fonts/vazir.woff2',
+];
+
+// ✅ Install: precache کردن assets ثابت
+self.addEventListener('install', (event) => {
+  event.waitUntil(
+    caches.open(STATIC_CACHE).then((cache) => {
+      return cache.addAll(PRECACHE_ASSETS);
+    })
+  );
+  self.skipWaiting();
+});
+
+// ✅ Activate: پاک کردن cache‌های قدیمی
+self.addEventListener('activate', (event) => {
+  event.waitUntil(
+    caches.keys().then((keys) => {
+      return Promise.all(
+        keys
+          .filter((key) => !key.endsWith(CACHE_VERSION))
+          .map((key) => caches.delete(key))
+      );
+    })
+  );
+  self.clients.claim();
+});
+
+// ✅ Fetch: انتخاب استراتژی بر اساس نوع request
+self.addEventListener('fetch', (event) => {
+  const url = new URL(event.request.url);
+  
+  // ✅ فقط same-origin requests
+  if (url.origin !== location.origin) return;
+  
+  // ✅ ۱. Static Assets: Cache Only
+  if (url.pathname.endsWith('.css') ||
+      url.pathname.endsWith('.js') ||
+      url.pathname.includes('/fonts/')) {
+    event.respondWith(cacheOnly(event.request, STATIC_CACHE));
+    return;
+  }
+  
+  // ✅ ۲. Images: Cache First
+  if (url.pathname.includes('/images/') ||
+      event.request.destination === 'image') {
+    event.respondWith(cacheFirst(event.request, IMAGES_CACHE));
+    return;
+  }
+  
+  // ✅ ۳. API Calls: Network First
+  if (url.pathname.startsWith('/api/')) {
+    // ✅ APIهای حساس: Network First
+    if (url.pathname.includes('/auth') ||
+        url.pathname.includes('/balance') ||
+        url.pathname.includes('/stock')) {
+      event.respondWith(networkFirst(event.request, API_CACHE));
+      return;
+    }
+    
+    // ✅ APIهای نیمه‌پویا: Stale While Revalidate
+    if (url.pathname.includes('/feed') ||
+        url.pathname.includes('/products')) {
+      event.respondWith(staleWhileRevalidate(event.request, DYNAMIC_CACHE));
+      return;
+    }
+    
+    // ✅ بقیه APIها: Network First
+    event.respondWith(networkFirst(event.request, API_CACHE));
+    return;
+  }
+  
+  // ✅ ۴. Navigation (صفحات): Network First با offline fallback
+  if (event.request.mode === 'navigate') {
+    event.respondWith(networkFirstWithOffline(event.request, API_CACHE));
+    return;
+  }
+  
+  // ✅ ۵. بقیه: Cache First
+  event.respondWith(cacheFirst(event.request, STATIC_CACHE));
+});
+
+// ✅ پیاده‌سازی استراتژی‌ها
+
+async function cacheOnly(request, cacheName) {
+  const cache = await caches.open(cacheName);
+  const cached = await cache.match(request);
+  
+  if (cached) return cached;
+  
+  const response = await fetch(request);
+  await cache.put(request, response.clone());
+  return response;
+}
+
+async function cacheFirst(request, cacheName) {
+  const cache = await caches.open(cacheName);
+  const cached = await cache.match(request);
+  
+  if (cached) return cached;
+  
+  try {
+    const response = await fetch(request);
+    if (response.ok) {
+      await cache.put(request, response.clone());
+    }
+    return response;
+  } catch (error) {
+    return caches.match('/placeholder.png');
+  }
+}
+
+async function networkFirst(request, cacheName) {
+  const cache = await caches.open(cacheName);
+  
+  try {
+    const response = await fetch(request);
+    if (response.ok) {
+      await cache.put(request, response.clone());
+    }
+    return response;
+  } catch (error) {
+    const cached = await cache.match(request);
+    if (cached) return cached;
+    throw error;
+  }
+}
+
+async function networkFirstWithOffline(request, cacheName) {
+  const cache = await caches.open(cacheName);
+  
+  try {
+    const response = await fetch(request);
+    if (response.ok) {
+      await cache.put(request, response.clone());
+    }
+    return response;
+  } catch (error) {
+    const cached = await cache.match(request);
+    if (cached) return cached;
+    return caches.match('/offline.html');
+  }
+}
+
+async function staleWhileRevalidate(request, cacheName) {
+  const cache = await caches.open(cacheName);
+  const cached = await cache.match(request);
+  
+  const fetchPromise = fetch(request)
+    .then((response) => {
+      if (response.ok) {
+        cache.put(request, response.clone());
+      }
+      return response;
+    })
+    .catch(() => null);
+  
+  return cached || fetchPromise;
+}
+```
+
+---
+
+## 🎨 بخش چهارم: راهنمای انتخاب استراتژی
+
+```jsx
+// components/CacheStrategySelector.jsx
+import { useState } from 'react';
+
+export function CacheStrategySelector() {
+  const [dataType, setDataType] = useState('');
+
+  const strategies = {
+    'static': {
+      name: 'Cache Only',
+      description: 'CSS، JS، فونت‌ها، آیکون‌ها',
+      icon: '⚡',
+      color: 'blue',
+    },
+    'images': {
+      name: 'Cache First',
+      description: 'تصاویر، ویدیوها، فایل‌های بزرگ',
+      icon: '🖼️',
+      color: 'green',
+    },
+    'api-sensitive': {
+      name: 'Network First',
+      description: 'APIهای حساس، auth، balance',
+      icon: '🔐',
+      color: 'red',
+    },
+    'api-dynamic': {
+      name: 'Stale While Revalidate',
+      description: 'Feed، product list، news',
+      icon: '🔄',
+      color: 'purple',
+    },
+    'pages': {
+      name: 'Network First + Offline',
+      description: 'صفحات HTML با fallback آفلاین',
+      icon: '📄',
+      color: 'orange',
+    },
+  };
+
+  return (
+    <div className="max-w-2xl mx-auto p-6 bg-white rounded-xl shadow-lg space-y-6">
+      <h2 className="text-2xl font-bold">🎯 کدوم استراتژی رو انتخاب کنم؟</h2>
+
+      <div>
+        <label className="block text-sm font-medium mb-2">
+          نوع داده رو انتخاب کن:
+        </label>
+        <select
+          value={dataType}
+          onChange={(e) => setDataType(e.target.value)}
+          className="w-full p-3 border border-gray-300 rounded-lg"
+        >
+          <option value="">انتخاب کنید...</option>
+          <option value="static">Assets ثابت (CSS، JS، فونت)</option>
+          <option value="images">تصاویر و مدیا</option>
+          <option value="api-sensitive">API حساس (auth، balance)</option>
+          <option value="api-dynamic">API پویا (feed، products)</option>
+          <option value="pages">صفحات HTML</option>
+        </select>
+      </div>
+
+      {dataType && strategies[dataType] && (
+        <div className={`p-6 bg-${strategies[dataType].color}-50 border border-${strategies[dataType].color}-200 rounded-lg`}>
+          <div className="flex items-center gap-3 mb-3">
+            <span className="text-4xl">{strategies[dataType].icon}</span>
+            <div>
+              <h3 className="font-bold text-lg">{strategies[dataType].name}</h3>
+              <p className="text-sm text-gray-600">{strategies[dataType].description}</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="grid grid-cols-2 gap-4">
+        <div className="p-4 bg-green-50 rounded-lg">
+          <h4 className="font-bold mb-2">✅ سرعت بالا</h4>
+          <p className="text-sm">Cache Only, Cache First, Stale While Revalidate</p>
+        </div>
+        <div className="p-4 bg-blue-50 rounded-lg">
+          <h4 className="font-bold mb-2">✅ داده تازه</h4>
+          <p className="text-sm">Network Only, Network First</p>
+        </div>
+        <div className="p-4 bg-purple-50 rounded-lg">
+          <h4 className="font-bold mb-2">✅ آفلاین</h4>
+          <p className="text-sm">Cache Only, Cache First, Network First</p>
+        </div>
+        <div className="p-4 bg-orange-50 rounded-lg">
+          <h4 className="font-bold mb-2">✅ بهینه</h4>
+          <p className="text-sm">Stale While Revalidate</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+```
+
+---
+
+## 🧪 بخش پنجم: تست و دیباگ
+
+### ۱. بررسی cache در DevTools
+
+```bash
+# ✅ Chrome DevTools → Application → Cache Storage
+# ✅ مشاهده cache‌های مختلف و محتوای آن‌ها
+
+# ✅ Console: بررسی cache‌ها
+caches.keys().then(console.log)
+
+# ✅ پاک کردن همه cache‌ها
+caches.keys().then(keys => {
+  keys.forEach(key => caches.delete(key))
+})
+```
+
+### ۲. تست حالت آفلاین
+
+```bash
+# ✅ DevTools → Network → Offline checkbox
+# ✅ صفحه رو رفرش کن
+# ✅ باید از cache لود بشه
+
+# ✅ تست API
+# ✅ DevTools → Network → Offline
+# ✅ API call بزن
+# ✅ باید از cache fallback بگیره
+```
+
+### ۳. کامپوننت Cache Debugger
+
+```jsx
+// components/CacheDebugger.jsx
+import { useState, useEffect } from 'react';
+
+export function CacheDebugger() {
+  const [caches, setCaches] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const loadCaches = async () => {
+      const keys = await window.caches.keys();
+      const cacheData = await Promise.all(
+        keys.map(async (key) => {
+          const cache = await window.caches.open(key);
+          const requests = await cache.keys();
+          return {
+            name: key,
+            count: requests.length,
+            size: requests.reduce((sum, req) => sum + req.url.length, 0),
+          };
+        })
+      );
+      setCaches(cacheData);
+      setLoading(false);
+    };
+
+    loadCaches();
+  }, []);
+
+  const clearAllCaches = async () => {
+    const keys = await window.caches.keys();
+    await Promise.all(keys.map((key) => window.caches.delete(key)));
+    setCaches([]);
+  };
+
+  if (loading) return <p>در حال بارگذاری...</p>;
+
+  return (
+    <div className="p-6 bg-gray-50 rounded-lg space-y-4">
+      <div className="flex items-center justify-between">
+        <h3 className="font-bold text-lg">🗂️ Cache Storage</h3>
+        <button
+          onClick={clearAllCaches}
+          className="bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 text-sm"
+        >
+          پاک کردن همه
+        </button>
+      </div>
+
+      {caches.length === 0 ? (
+        <p className="text-gray-500 text-center py-4">هیچ cache ای وجود نداره</p>
+      ) : (
+        <div className="space-y-2">
+          {caches.map((cache, idx) => (
+            <div key={idx} className="p-3 bg-white rounded border flex justify-between items-center">
+              <div>
+                <p className="font-medium text-sm">{cache.name}</p>
+                <p className="text-xs text-gray-500">{cache.count} آیتم</p>
+              </div>
+              <span className="text-xs text-gray-400">
+                {(cache.size / 1024).toFixed(1)} KB
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+---
+
+**🔗 ابزار تست**
+
+- **Chrome DevTools** → Application → Cache Storage
+- **DevTools** → Network → Offline checkbox
+- **DevTools** → Network → Throttling (شبیه‌سازی 3G)
+- **Console**: `caches.keys()` برای مشاهده cache‌ها
+- **Lighthouse** → PWA → بررسی cache strategies
+- **Workbox**: کتابخانه‌ی Google برای مدیریت cache
+
+**⚠️ چک‌لیست نهایی**
+
+**استراتژی‌ها:**
+- [ ] Cache Only برای assets ثابت؟
+- [ ] Cache First برای تصاویر؟
+- [ ] Network First برای APIها؟
+- [ ] Stale While Revalidate برای داده‌های نیمه‌پویا؟
+- [ ] Network First + Offline fallback برای صفحات؟
+
+**مدیریت cache:**
+- [ ] version در نام cache استفاده شده؟
+- [ ] cleanup cache‌های قدیمی در activate؟
+- [ ] `clone()` قبل از cache کردن response؟
+- [ ] مدیریت خطا در network fallback؟
+
+**تست:**
+- [ ] حالت آفلاین تست شده؟
+- [ ] سرعت لود بررسی شده؟
+- [ ] مصرف داده اندازه‌گیری شده؟
+- [ ] در DevTools → Application تست شده؟
+
+> **قانون ۳ ثانیه‌ای:** DevTools → Application → Cache Storage رو باز کن. آیا cache‌های مختلف (static, images, api) می‌بینی؟ بعد Network → Offline رو فعال کن و صفحه رو رفرش کن. آیا از cache لود میشه؟ اگه نه، یعنی استراتژی‌ها درست پیاده‌سازی نشدن!

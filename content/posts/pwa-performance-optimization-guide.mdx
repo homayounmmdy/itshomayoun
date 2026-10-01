@@ -1,0 +1,1018 @@
+---
+title: "PWA: بهینه‌سازی عملکرد و UX (راهنمای کامل)"
+date: '2026-10-01'
+playlist: 'PWA - برنامه وب پیشرونده'
+tags: ['PWA', 'Performance', 'App-Shell', 'Precaching', 'Lazy-Loading', 'Image-Optimization', 'Skeleton-Screens', 'UX', 'React', 'Next.js']
+description: "راهنمای کامل بهینه‌سازی عملکرد PWA: App Shell Model، Precaching، Lazy Loading، Image Optimization، Resource Hints، Skeleton Screens و Smooth Transitions - چطور یه PWA فوق‌سریع بسازیم؟"
+enableComment: true
+---
+
+# ⚡ PWA: بهینه‌سازی عملکرد و UX (راهنمای کامل)
+
+**💡 مفهوم کلیدی**  
+هفت تکنیک کلیدی برای ساخت یه PWA **فوق‌سریع** با **تجربه‌ی کاربری عالی**:
+- **App Shell Model**: معماری برای لود اولیه‌ی سریع
+- **Precaching**: ذخیره‌ی فایل‌های ضروری در install
+- **Lazy Loading**: بارگذاری تنبل برای کاهش bundle size
+- **Image Optimization**: فرمت‌های مدرن مثل WebP و AVIF
+- **Resource Hints**: preconnect، prefetch، preload
+- **Skeleton Screens**: placeholder برای perceived performance
+- **Smooth Transitions**: انیمیشن‌های روان بین صفحات
+
+این تکنیک‌ها تفاوت بین یه PWA **۱ ثانیه‌ای** و یه سایت **۱۰ ثانیه‌ای** هستن!
+
+**⚠️ دام رایج**  
+- بارگذاری همه‌چیز در initial bundle (bundle size بزرگ).
+- عدم استفاده از App Shell (کاربر صفحه‌ی سفید می‌بینه).
+- تصاویر بهینه‌نشده (۱۰ برابر حجم بیشتر).
+- عدم prefetch برای صفحات بعدی.
+- Skeleton Screen زشت یا گمراه‌کننده.
+- انیمیشن‌های سنگین که `prefers-reduced-motion` رو نادیده می‌گیرن.
+- فراموش کردن `loading="lazy"` برای تصاویر.
+- عدم استفاده از `font-display: swap`.
+
+**📏 جدول مقایسه تکنیک‌ها**
+
+| تکنیک                  | تأثیر بر FCP | تأثیر بر LCP | پیچیدگی | مناسب برای              |
+|------------------------|--------------|--------------|---------|--------------------------|
+| App Shell Model        | ⚡⚡⚡        | ⚡⚡⚡        | متوسط  | همه‌ی PWAها              |
+| Precaching             | ⚡⚡⚡        | ⚡⚡⚡        | کم     | Assets ثابت              |
+| Lazy Loading           | ⚡⚡          | ⚡            | کم     | تصاویر، کامپوننت‌ها     |
+| Image Optimization     | ⚡            | ⚡⚡⚡        | کم     | همه‌ی تصاویر              |
+| Resource Hints         | ⚡⚡          | ⚡⚡          | کم     | فونت‌ها، صفحات بعدی      |
+| Skeleton Screens       | ⚡ (perceived)| ⚡ (perceived)| کم     | محتوای پویا               |
+| Smooth Transitions     | -            | -            | متوسط  | ناوبری بین صفحات          |
+
+---
+
+## 🏗️ بخش اول: App Shell Model
+
+**💡 مفهوم:**  
+App Shell یعنی **حداقل HTML/CSS/JS** که برای نمایش UI اولیه لازمه. کاربر اول shell رو می‌بینه (سریع!)، بعد محتوا از cache یا شبکه میاد.
+
+### ۱. ساختار App Shell
+
+```jsx
+// app/shell/layout.jsx
+// ✅ حداقل HTML برای نمایش UI اولیه
+
+export default function AppShellLayout({ children }) {
+  return (
+    <html lang="fa" dir="rtl">
+      <head>
+        <meta charSet="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>فروشگاه من</title>
+        
+        {/* ✅ CSS حیاتی inline (برای سرعت) */}
+        <style dangerouslySetInnerHTML={{ __html: `
+          * { margin: 0; padding: 0; box-sizing: border-box; }
+          body { font-family: 'Vazir', sans-serif; background: #f9fafb; }
+          .header { background: #2563eb; color: white; padding: 1rem; }
+          .main { max-width: 1200px; margin: 0 auto; padding: 1rem; }
+        `}} />
+        
+        {/* ✅ فونت با font-display: swap */}
+        <link 
+          rel="preload" 
+          href="/fonts/vazir.woff2" 
+          as="font" 
+          type="font/woff2" 
+          crossOrigin="anonymous"
+        />
+      </head>
+      <body>
+        {/* ✅ Header ثابت */}
+        <header className="header">
+          <div className="container flex items-center justify-between">
+            <Logo />
+            <nav>
+              <a href="/">خانه</a>
+              <a href="/products">محصولات</a>
+              <a href="/cart">سبد خرید</a>
+            </nav>
+          </div>
+        </header>
+
+        {/* ✅ محتوای اصلی */}
+        <main className="main">
+          {children}
+        </main>
+
+        {/* ✅ Footer ثابت */}
+        <footer className="bg-gray-800 text-white p-4 text-center">
+          <p>© ۱۴۰۵ فروشگاه من</p>
+        </footer>
+      </body>
+    </html>
+  );
+}
+```
+
+### ۲. Precaching App Shell در Service Worker
+
+```js
+// public/sw.js
+
+const SHELL_CACHE = 'app-shell-v1';
+const SHELL_ASSETS = [
+  '/',
+  '/styles.css',
+  '/app.js',
+  '/fonts/vazir.woff2',
+  '/icons/logo.svg',
+];
+
+// ✅ Install: precache کردن shell
+self.addEventListener('install', (event) => {
+  event.waitUntil(
+    caches.open(SHELL_CACHE).then((cache) => {
+      console.log('[SW] Precaching app shell');
+      return cache.addAll(SHELL_ASSETS);
+    })
+  );
+  self.skipWaiting();
+});
+
+// ✅ Fetch: همیشه shell رو از cache برگردون (سریع!)
+self.addEventListener('fetch', (event) => {
+  if (event.request.mode === 'navigate') {
+    event.respondWith(
+      caches.match(event.request).then((cached) => {
+        return cached || fetch(event.request);
+      })
+    );
+  }
+});
+```
+
+---
+
+## 📦 بخش دوم: Precaching
+
+**💡 مفهوم:**  
+ذخیره‌ی فایل‌های ضروری **هنگام install** Service Worker، تا وقتی کاربر آنلاینه، همه‌چیز آماده باشه.
+
+### ۳. Precaching با Workbox (توصیه‌شده)
+
+```js
+// public/sw.js
+import { precacheAndRoute } from 'workbox-precaching';
+import { registerRoute } from 'workbox-routing';
+import { CacheFirst, NetworkFirst, StaleWhileRevalidate } from 'workbox-strategies';
+import { ExpirationPlugin } from 'workbox-expiration';
+
+// ✅ Precache کردن فایل‌های build شده
+// این لیست توسط build tool (مثل webpack/vite) تولید میشه
+precacheAndRoute(self.__WB_MANIFEST);
+
+// ✅ Cache کردن تصاویر با Cache First
+registerRoute(
+  ({ request }) => request.destination === 'image',
+  new CacheFirst({
+    cacheName: 'images-cache',
+    plugins: [
+      new ExpirationPlugin({
+        maxEntries: 100,
+        maxAgeSeconds: 30 * 24 * 60 * 60, // ۳۰ روز
+      }),
+    ],
+  })
+);
+
+// ✅ Cache کردن فونت‌ها
+registerRoute(
+  ({ request }) => request.destination === 'font',
+  new CacheFirst({
+    cacheName: 'fonts-cache',
+    plugins: [
+      new ExpirationPlugin({
+        maxEntries: 10,
+        maxAgeSeconds: 365 * 24 * 60 * 60, // ۱ سال
+      }),
+    ],
+  })
+);
+
+// ✅ Cache کردن APIها با Network First
+registerRoute(
+  ({ url }) => url.pathname.startsWith('/api/'),
+  new NetworkFirst({
+    cacheName: 'api-cache',
+    networkTimeoutSeconds: 3,
+    plugins: [
+      new ExpirationPlugin({
+        maxEntries: 50,
+        maxAgeSeconds: 5 * 60, // ۵ دقیقه
+      }),
+    ],
+  })
+);
+```
+
+### ۴. Precaching دستی (بدون Workbox)
+
+```js
+// public/sw.js
+
+const PRECACHE_ASSETS = [
+  '/',
+  '/offline.html',
+  '/styles.css',
+  '/app.js',
+  '/fonts/vazir.woff2',
+  '/icons/logo.svg',
+  '/icons/icon-192.png',
+  '/icons/icon-512.png',
+];
+
+self.addEventListener('install', (event) => {
+  event.waitUntil(
+    caches.open('precache-v1').then((cache) => {
+      // ✅addAll اتمیکه: اگه یه فایل fail بشه، هیچکدوم cache نمیشن
+      return cache.addAll(PRECACHE_ASSETS);
+    })
+  );
+  self.skipWaiting();
+});
+```
+
+---
+
+## 🎯 بخش سوم: Lazy Loading
+
+**💡 مفهوم:**  
+بارگذاری کد و تصاویر **فقط وقتی لازم بشن** (وقتی کاربر بهشون نزدیک بشه).
+
+### ۵. Lazy Loading تصاویر
+
+```jsx
+// ✅ روش ۱: Native lazy loading (ساده‌ترین)
+<img 
+  src="/product.jpg" 
+  alt="محصول" 
+  loading="lazy"
+  width="400"
+  height="300"
+/>
+
+// ✅ روش ۲: با Intersection Observer (کنترل بیشتر)
+function LazyImage({ src, alt, placeholder = '/placeholder.svg' }) {
+  const [imageSrc, setImageSrc] = useState(placeholder);
+  const [loaded, setLoaded] = useState(false);
+  const imgRef = useRef(null);
+
+  useEffect(() => {
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting) {
+          setImageSrc(src);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: '200px' } // ✅ شروع لود ۲۰۰ پیکسل قبل از visible شدن
+    );
+
+    if (imgRef.current) {
+      observer.observe(imgRef.current);
+    }
+
+    return () => observer.disconnect();
+  }, [src]);
+
+  return (
+    <img
+      ref={imgRef}
+      src={imageSrc}
+      alt={alt}
+      onLoad={() => setLoaded(true)}
+      className={`transition-opacity duration-300 ${loaded ? 'opacity-100' : 'opacity-50'}`}
+    />
+  );
+}
+```
+
+### ۶. Lazy Loading کامپوننت‌ها (React)
+
+```jsx
+// ✅ با React.lazy و Suspense
+import { lazy, Suspense } from 'react';
+
+const HeavyComponent = lazy(() => import('./HeavyComponent'));
+const ProductDetails = lazy(() => import('./ProductDetails'));
+
+function ProductPage() {
+  return (
+    <div>
+      <h1>محصول</h1>
+      
+      {/* ✅ Skeleton هنگام لود */}
+      <Suspense fallback={<ProductSkeleton />}>
+        <HeavyComponent />
+      </Suspense>
+
+      {/* ✅ Prefetch وقتی کاربر hover می‌کنه */}
+      <button
+        onMouseEnter={() => {
+          import('./ProductDetails');
+        }}
+      >
+        مشاهده جزئیات
+      </button>
+    </div>
+  );
+}
+```
+
+### ۷. Lazy Loading در Next.js
+
+```jsx
+// ✅ با next/dynamic
+import dynamic from 'next/dynamic';
+
+const HeavyChart = dynamic(() => import('./HeavyChart'), {
+  loading: () => <ChartSkeleton />,
+  ssr: false, // ✅ فقط در client لود بشه
+});
+
+const ProductGallery = dynamic(() => import('./ProductGallery'), {
+  loading: () => <GallerySkeleton />,
+});
+
+export default function ProductPage() {
+  return (
+    <div>
+      <h1>محصول</h1>
+      <HeavyChart />
+      <ProductGallery />
+    </div>
+  );
+}
+```
+
+### ۸. Route-based Code Splitting
+
+```jsx
+// ✅ در Next.js App Router: خودکار انجام میشه!
+// هر page یه chunk جدا داره
+
+// ✅ در React Router: با lazy
+import { lazy, Suspense } from 'react';
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
+
+const Home = lazy(() => import('./pages/Home'));
+const Products = lazy(() => import('./pages/Products'));
+const Cart = lazy(() => import('./pages/Cart'));
+
+function App() {
+  return (
+    <BrowserRouter>
+      <Suspense fallback={<PageSkeleton />}>
+        <Routes>
+          <Route path="/" element={<Home />} />
+          <Route path="/products" element={<Products />} />
+          <Route path="/cart" element={<Cart />} />
+        </Routes>
+      </Suspense>
+    </BrowserRouter>
+  );
+}
+```
+
+---
+
+## 🖼️ بخش چهارم: Image Optimization
+
+**💡 مفهوم:**  
+استفاده از فرمت‌های مدرن (WebP، AVIF) و responsive images برای کاهش حجم تصاویر تا **۸۰٪**.
+
+### ۹. استفاده از WebP و AVIF
+
+```jsx
+// ✅ با <picture> برای fallback
+<picture>
+  <source srcSet="/image.avif" type="image/avif" />
+  <source srcSet="/image.webp" type="image/webp" />
+  <img src="/image.jpg" alt="توضیح" loading="lazy" />
+</picture>
+```
+
+### ۱۰. Next.js Image Optimization (توصیه‌شده)
+
+```jsx
+// ✅ با next/image (خودکار بهینه می‌کنه)
+import Image from 'next/image';
+
+function ProductImage({ src, alt }) {
+  return (
+    <Image
+      src={src}
+      alt={alt}
+      width={800}
+      height={600}
+      sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 33vw"
+      priority={false} // ✅ برای تصاویر بالای fold: true
+      placeholder="blur" // ✅ blur placeholder
+      blurDataURL="data:image/jpeg;base64,/9j/4AAQSkZJR..."
+      className="rounded-lg"
+    />
+  );
+}
+```
+
+### ۱۱. تبدیل تصاویر با Sharp
+
+```js
+// scripts/optimize-images.js
+const sharp = require('sharp');
+const fs = require('fs');
+const path = require('path');
+
+const inputDir = 'public/images/original';
+const outputDir = 'public/images/optimized';
+
+async function optimizeImages() {
+  const files = fs.readdirSync(inputDir);
+
+  for (const file of files) {
+    const inputPath = path.join(inputDir, file);
+    const name = path.parse(file).name;
+
+    // ✅ WebP
+    await sharp(inputPath)
+      .webp({ quality: 80 })
+      .toFile(path.join(outputDir, `${name}.webp`));
+
+    // ✅ AVIF (بهترین کیفیت/حجم)
+    await sharp(inputPath)
+      .avif({ quality: 60 })
+      .toFile(path.join(outputDir, `${name}.avif`));
+
+    // ✅ Thumbnail برای placeholder
+    await sharp(inputPath)
+      .resize(20, 20, { fit: 'inside' })
+      .blur(5)
+      .toFile(path.join(outputDir, `${name}-thumb.jpg`));
+
+    console.log(`✅ Optimized: ${file}`);
+  }
+}
+
+optimizeImages();
+```
+
+### ۱۲. Responsive Images
+
+```jsx
+// ✅ با srcSet برای دستگاه‌های مختلف
+<img
+  src="/image-800.jpg"
+  srcSet={`
+    /image-400.jpg 400w,
+    /image-800.jpg 800w,
+    /image-1200.jpg 1200w,
+    /image-1600.jpg 1600w
+  `}
+  sizes="(max-width: 600px) 400px, (max-width: 1200px) 800px, 1200px"
+  alt="توضیح"
+  loading="lazy"
+/>
+```
+
+---
+
+## 🔗 بخش پنجم: Resource Hints
+
+**💡 مفهوم:**  
+به مرورگر بگو **چه منابعی رو زودتر** لود کنه (قبل از اینکه لازم بشن).
+
+### ۱۳. Preconnect (اتصال زودهنگام به domain)
+
+```html
+<!-- ✅ برای CDN، فونت‌ها، APIها -->
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin />
+<link rel="preconnect" href="https://api.example.com" />
+<link rel="preconnect" href="https://cdn.example.com" />
+
+<!-- ✅ DNS Prefetch (برای مرورگرهای قدیمی‌تر) -->
+<link rel="dns-prefetch" href="https://api.example.com" />
+```
+
+### ۱۴. Preload (لود فوری منابع حیاتی)
+
+```html
+<!-- ✅ فونت‌ها -->
+<link 
+  rel="preload" 
+  href="/fonts/vazir.woff2" 
+  as="font" 
+  type="font/woff2" 
+  crossOrigin="anonymous"
+/>
+
+<!-- ✅ تصویر LCP (بزرگترین تصویر بالای fold) -->
+<link rel="preload" as="image" href="/hero.jpg" type="image/jpeg" />
+
+<!-- ✅ CSS حیاتی -->
+<link rel="preload" as="style" href="/critical.css" />
+
+<!-- ✅ Script حیاتی -->
+<link rel="preload" as="script" href="/app.js" />
+```
+
+### ۱۵. Prefetch (لود منابع صفحات بعدی)
+
+```html
+<!-- ✅ وقتی کاربر احتمالاً به صفحه بعد میره -->
+<link rel="prefetch" href="/products" as="document" />
+<link rel="prefetch" href="/api/products" as="fetch" crossOrigin />
+
+<!-- ✅ در Next.js: خودکار با <Link> انجام میشه -->
+<Link href="/products">محصولات</Link>
+<!-- ✅ وقتی لینک visible بشه، prefetch میشه -->
+```
+
+### ۱۶. Prefetch هوشمند در React
+
+```jsx
+// hooks/usePrefetch.js
+import { useEffect } from 'react';
+
+export function usePrefetch(urls, trigger = 'hover') {
+  useEffect(() => {
+    const prefetch = () => {
+      urls.forEach((url) => {
+        const link = document.createElement('link');
+        link.rel = 'prefetch';
+        link.href = url;
+        link.as = 'document';
+        document.head.appendChild(link);
+      });
+    };
+
+    if (trigger === 'hover') {
+      // ✅ Prefetch وقتی کاربر روی لینک hover می‌کنه
+      const links = document.querySelectorAll('[data-prefetch]');
+      links.forEach((link) => {
+        link.addEventListener('mouseenter', prefetch, { once: true });
+      });
+    } else if (trigger === 'idle') {
+      // ✅ Prefetch وقتی مرورگر بیکاره
+      if ('requestIdleCallback' in window) {
+        requestIdleCallback(prefetch);
+      } else {
+        setTimeout(prefetch, 2000);
+      }
+    }
+  }, [urls, trigger]);
+}
+
+// ✅ استفاده:
+function ProductCard({ product }) {
+  usePrefetch([`/products/${product.id}`], 'hover');
+
+  return (
+    <a 
+      href={`/products/${product.id}`}
+      data-prefetch
+    >
+      {product.name}
+    </a>
+  );
+}
+```
+
+### ۱۷. Preload در Next.js
+
+```jsx
+// app/layout.jsx
+import './globals.css';
+
+export default function RootLayout({ children }) {
+  return (
+    <html lang="fa">
+      <head>
+        {/* ✅ Preload فونت */}
+        <link
+          rel="preload"
+          href="/fonts/vazir.woff2"
+          as="font"
+          type="font/woff2"
+          crossOrigin="anonymous"
+        />
+
+        {/* ✅ Preconnect به CDN */}
+        <link rel="preconnect" href="https://cdn.example.com" />
+      </head>
+      <body>{children}</body>
+    </html>
+  );
+}
+```
+
+---
+
+## 💀 بخش ششم: Skeleton Screens
+
+**💡 مفهوم:**  
+نمایش **placeholder** هنگام لود محتوا، تا کاربر احساس کنه اپ سریع‌تره (perceived performance).
+
+### ۱۸. Skeleton برای Product Card
+
+```jsx
+// components/ProductSkeleton.jsx
+export function ProductSkeleton() {
+  return (
+    <div className="animate-pulse bg-white rounded-lg shadow p-4 space-y-3">
+      {/* ✅ تصویر */}
+      <div className="bg-gray-200 rounded-lg h-48 w-full" />
+
+      {/* ✅ عنوان */}
+      <div className="space-y-2">
+        <div className="bg-gray-200 rounded h-4 w-3/4" />
+        <div className="bg-gray-200 rounded h-4 w-1/2" />
+      </div>
+
+      {/* ✅ قیمت */}
+      <div className="bg-gray-200 rounded h-6 w-1/3" />
+
+      {/* ✅ دکمه */}
+      <div className="bg-gray-200 rounded h-10 w-full" />
+    </div>
+  );
+}
+
+// ✅ استفاده:
+function ProductList({ products, loading }) {
+  if (loading) {
+    return (
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        {Array.from({ length: 8 }).map((_, i) => (
+          <ProductSkeleton key={i} />
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      {products.map((product) => (
+        <ProductCard key={product.id} product={product} />
+      ))}
+    </div>
+  );
+}
+```
+
+### ۱۹. Skeleton برای صفحه‌ی کامل
+
+```jsx
+// components/PageSkeleton.jsx
+export function PageSkeleton() {
+  return (
+    <div className="animate-pulse space-y-4">
+      {/* ✅ Header */}
+      <div className="bg-gray-200 h-16 w-full" />
+
+      {/* ✅ Hero */}
+      <div className="bg-gray-200 h-64 w-full rounded-lg" />
+
+      {/* ✅ Content */}
+      <div className="space-y-3">
+        <div className="bg-gray-200 h-4 w-full" />
+        <div className="bg-gray-200 h-4 w-5/6" />
+        <div className="bg-gray-200 h-4 w-4/6" />
+      </div>
+
+      {/* ✅ Grid */}
+      <div className="grid grid-cols-3 gap-4">
+        {Array.from({ length: 6 }).map((_, i) => (
+          <div key={i} className="bg-gray-200 h-32 rounded-lg" />
+        ))}
+      </div>
+    </div>
+  );
+}
+```
+
+### ۲۰. Skeleton با Blur Hash (حرفه‌ای)
+
+```jsx
+// ✅ با blurhash برای placeholder زیبا
+import { Blurhash } from 'react-blurhash';
+
+function ImageWithBlurhash({ src, blurhash, alt }) {
+  const [loaded, setLoaded] = useState(false);
+
+  return (
+    <div className="relative">
+      {!loaded && (
+        <Blurhash
+          hash={blurhash}
+          width="100%"
+          height="100%"
+          resolutionX={32}
+          resolutionY={32}
+          punch={1}
+        />
+      )}
+      <img
+        src={src}
+        alt={alt}
+        onLoad={() => setLoaded(true)}
+        className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-500 ${
+          loaded ? 'opacity-100' : 'opacity-0'
+        }`}
+      />
+    </div>
+  );
+}
+```
+
+---
+
+## 🎬 بخش هفتم: Smooth Transitions
+
+**💡 مفهوم:**  
+انیمیشن‌های روان بین صفحات برای احساس اپ‌مانند.
+
+### ۲۱. Page Transitions در Next.js
+
+```jsx
+// ✅ با Framer Motion
+'use client';
+
+import { motion, AnimatePresence } from 'framer-motion';
+import { usePathname } from 'next/navigation';
+
+export function PageTransition({ children }) {
+  const pathname = usePathname();
+
+  return (
+    <AnimatePresence mode="wait">
+      <motion.div
+        key={pathname}
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0, y: -20 }}
+        transition={{ duration: 0.3, ease: 'easeInOut' }}
+      >
+        {children}
+      </motion.div>
+    </AnimatePresence>
+  );
+}
+
+// ✅ استفاده در layout:
+export default function RootLayout({ children }) {
+  return (
+    <html>
+      <body>
+        <PageTransition>{children}</PageTransition>
+      </body>
+    </html>
+  );
+}
+```
+
+### ۲۲. View Transitions API (مدرن)
+
+```jsx
+// ✅ View Transitions API (Chrome 111+)
+async function navigateWithTransition(url) {
+  if (!document.startViewTransition) {
+    // ✅ Fallback برای مرورگرهای قدیمی
+    window.location.href = url;
+    return;
+  }
+
+  document.startViewTransition(() => {
+    window.location.href = url;
+  });
+}
+
+// ✅ CSS برای انیمیشن
+// styles.css
+::view-transition-old(root) {
+  animation: fade-out 0.3s ease-out;
+}
+
+::view-transition-new(root) {
+  animation: fade-in 0.3s ease-in;
+}
+
+@keyframes fade-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+```
+
+### ۲۳. احترام به prefers-reduced-motion
+
+```jsx
+// ✅ هوک برای تشخیص reduced motion
+function useReducedMotion() {
+  const [reduced, setReduced] = useState(false);
+
+  useEffect(() => {
+    const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+    setReduced(mq.matches);
+
+    const handler = (e) => setReduced(e.matches);
+    mq.addEventListener('change', handler);
+    return () => mq.removeEventListener('change', handler);
+  }, []);
+
+  return reduced;
+}
+
+// ✅ استفاده:
+function AnimatedComponent() {
+  const reducedMotion = useReducedMotion();
+
+  return (
+    <motion.div
+      animate={reducedMotion ? {} : { y: [0, -10, 0] }}
+      transition={{ duration: 2, repeat: Infinity }}
+    >
+      محتوا
+    </motion.div>
+  );
+}
+
+// ✅ یا در CSS:
+// @media (prefers-reduced-motion: reduce) {
+//   * {
+//     animation-duration: 0.01ms !important;
+//     transition-duration: 0.01ms !important;
+//   }
+// }
+```
+
+### ۲۴. Shared Element Transitions
+
+```jsx
+// ✅ وقتی یه عنصر از یه صفحه به صفحه دیگه میره
+import { motion, LayoutGroup } from 'framer-motion';
+
+function ProductList() {
+  return (
+    <LayoutGroup>
+      {products.map((product) => (
+        <Link key={product.id} href={`/products/${product.id}`}>
+          <motion.div layoutId={`product-${product.id}`}>
+            <img src={product.image} alt={product.name} />
+            <h3>{product.name}</h3>
+          </motion.div>
+        </Link>
+      ))}
+    </LayoutGroup>
+  );
+}
+
+function ProductDetails({ product }) {
+  return (
+    <motion.div layoutId={`product-${product.id}`}>
+      <img src={product.image} alt={product.name} />
+      <h1>{product.name}</h1>
+      <p>{product.description}</p>
+    </motion.div>
+  );
+}
+```
+
+---
+
+## 🎯 بخش هشتم: ترکیب همه با هم
+
+### ۲۵. چک‌لیست Performance
+
+```jsx
+// components/PerformanceChecklist.jsx
+export function PerformanceChecklist() {
+  const checks = [
+    {
+      category: 'App Shell',
+      items: [
+        'HTML حداقلی برای لود اولیه',
+        'CSS حیاتی inline شده',
+        'Service Worker ثبت شده',
+      ],
+    },
+    {
+      category: 'Precaching',
+      items: [
+        'Assets ثابت در install cache شدن',
+        'Version در نام cache',
+        'Cleanup cache قدیمی',
+      ],
+    },
+    {
+      category: 'Lazy Loading',
+      items: [
+        'تصاویر با loading="lazy"',
+        'کامپوننت‌ها با React.lazy',
+        'Route-based code splitting',
+      ],
+    },
+    {
+      category: 'Image Optimization',
+      items: [
+        'فرمت WebP/AVIF',
+        'Responsive images با srcSet',
+        'Blur placeholder',
+      ],
+    },
+    {
+      category: 'Resource Hints',
+      items: [
+        'Preconnect به CDN',
+        'Preload فونت‌ها و LCP',
+        'Prefetch صفحات بعدی',
+      ],
+    },
+    {
+      category: 'UX',
+      items: [
+        'Skeleton screens',
+        'Smooth transitions',
+        'Respect prefers-reduced-motion',
+      ],
+    },
+  ];
+
+  return (
+    <div className="max-w-2xl mx-auto p-6 bg-white rounded-xl shadow-lg space-y-6">
+      <h2 className="text-2xl font-bold">⚡ چک‌لیست Performance</h2>
+
+      <div className="space-y-4">
+        {checks.map((category, idx) => (
+          <div key={idx} className="border border-gray-200 rounded-lg p-4">
+            <h3 className="font-bold text-lg mb-2">{category.category}</h3>
+            <ul className="space-y-1">
+              {category.items.map((item, i) => (
+                <li key={i} className="flex items-start gap-2 text-sm">
+                  <input type="checkbox" className="mt-1" />
+                  <span>{item}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+```
+
+---
+
+**🔗 ابزار تست**
+
+- **Lighthouse**: بررسی Performance، PWA، Accessibility
+- **WebPageTest**: تست سرعت واقعی
+- **Chrome DevTools** → Performance: بررسی FCP، LCP، TTI
+- **DevTools** → Network: بررسی waterfall
+- **DevTools** → Coverage: بررسی unused code
+- **DevTools** → Application → Cache Storage: بررسی cache
+- **PageSpeed Insights**: امتیاز موبایل و دسکتاپ
+
+**⚠️ چک‌لیست نهایی**
+
+**App Shell:**
+- [ ] HTML حداقلی برای لود اولیه؟
+- [ ] CSS حیاتی inline شده؟
+- [ ] Shell در Service Worker precache شده؟
+
+**Precaching:**
+- [ ] Assets ثابت در install cache شدن؟
+- [ ] Version در نام cache استفاده شده؟
+- [ ] Cleanup cache قدیمی در activate؟
+
+**Lazy Loading:**
+- [ ] تصاویر با `loading="lazy"`؟
+- [ ] کامپوننت‌ها با `React.lazy`؟
+- [ ] Route-based code splitting؟
+
+**Image Optimization:**
+- [ ] فرمت WebP/AVIF استفاده شده؟
+- [ ] Responsive images با srcSet؟
+- [ ] Width و height مشخص برای جلوگیری از CLS؟
+
+**Resource Hints:**
+- [ ] Preconnect به CDN؟
+- [ ] Preload فونت‌ها و LCP image؟
+- [ ] Prefetch صفحات بعدی؟
+
+**UX:**
+- [ ] Skeleton screens برای محتوای پویا؟
+- [ ] Smooth transitions بین صفحات؟
+- [ ] احترام به `prefers-reduced-motion`؟
+
+> **قانون ۳ ثانیه‌ای:** Lighthouse رو باز کن و Performance رو چک کن. آیا FCP زیر ۱.۸ ثانیه و LCP زیر ۲.۵ ثانیه هست؟ بعد DevTools → Network → Offline رو فعال کن و صفحه رو رفرش کن؛ آیا از cache لود میشه؟ بعد تصاویر رو چک کن؛ آیا WebP/AVIF هستن؟ اگه نه، یعنی بهینه‌سازی نکردی!
