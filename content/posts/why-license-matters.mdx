@@ -1,0 +1,373 @@
+---
+title: "⚖️ چرا پروژه بدون لایسنس، عملاً «غیرقابل استفاده» است؟"
+date: '2026-10-03'
+playlist: 'پایه‌های حقوقی'
+playlistOrder: 1
+tags: ['License', 'Copyright', 'Open-Source', 'Legal', 'GitHub', 'MIT', 'GPL', 'Project-Setup']
+description: "خیلی‌ها فکر می‌کنن کدِ روی GitHub یعنی «آزاد برای استفاده»؛ ولی واقعیت اینه که بدون لایسنس، کدت عملاً قفل‌شده‌ست. در این پست می‌فهمی چرا و چطور درستش کنی."
+enableComment: true
+---
+
+# ⚖️ چرا پروژه بدون لایسنس، عملاً «غیرقابل استفاده» است؟
+
+## 💡 مفهوم کلیدی
+
+وقتی کدی می‌نویسی، به صورت **خودکار** تحت قانون کپی‌رایت قرار می‌گیره و **تمام حقوقش مال خودته**. یعنی هیچ‌کس حق نداره کدت رو استفاده، کپی، تغییر یا توزیع کنه — حتی اگه روی GitHub عمومی باشه! لایسنس یعنی **مجوزنامه‌ی رسمی** که به بقیه می‌گی: «با این شرایط می‌تونی از کدم استفاده کنی». بدون لایسنس، پروژه‌ت عملاً **نمایشی** است، نه کاربردی.
+
+## ⚠️ دام رایج
+
+- ❌ فکر کردن به اینکه «کد روی GitHub = آزاد برای استفاده» (این بزرگ‌ترین اشتباهه!)
+- ❌ کپی کردن لایسنس از پروژه‌های دیگه بدون درک تفاوت‌هاشون
+- ❌ تغییر دادن متن لایسنس‌های استاندارد (این کار لایسنس رو بی‌اعتبار می‌کنه!)
+- ❌ فراموش کردن ذکر سال و نام صاحب کپی‌رایت
+- ❌ اضافه نکردن هدر کپی‌رایت به فایل‌های کد (مخصوصاً در پروژه‌های بزرگ)
+- ❌ نادیده گرفتن لایسنس وابستگی‌ها (ممکنه با لایسنس پروژه‌ت تضاد داشته باشن!)
+- ❌ انتخاب لایسنس بدون درک هدف پروژه (تجاری؟ آموزشی؟ اجتماعی؟)
+- ❌ فکر کردن به اینکه «بعداً لایسنس اضافه می‌کنم» (هر کامیت بدون لایسنس، یک بمب حقوقی!)
+- ❌ عدم بررسی سازگاری لایسنس‌ها وقتی کد رو با هم ترکیب می‌کنی
+- ❌ استفاده از لایسنس‌های سفارشی و غیراستاندارد (هیچ‌کس نمی‌تونه تفسیرش کنه)
+
+## 📏 وضعیت حقوقی پروژه با و بدون لایسنس
+
+| سناریو | بدون لایسنس | با لایسنس (مثلاً MIT) |
+|--------|-------------|----------------------|
+| استفاده شخصی | ✅ مجاز | ✅ مجاز |
+| استفاده تجاری | ❌ **ممنوع** | ✅ مجاز |
+| تغییر و Fork | ❌ **ممنوع** | ✅ مجاز |
+| توزیع مجدد | ❌ **ممنوع** | ✅ مجاز |
+| ادغام در پروژه‌ی دیگر | ❌ **ممنوع** | ✅ مجاز |
+| پیگرد قانونی در صورت نقض | ✅ امکان‌پذیر | ✅ امکان‌پذیر |
+| جذب مشارکت‌کننده | ❌ خیلی سخت | ✅ آسان |
+| استفاده در شرکت‌ها | ❌ **تقریباً غیرممکن** | ✅ رایج |
+
+> ⚠️ **نکته حیاتی**: شرکت‌های بزرگ (مثل Google, Microsoft, Meta) **سیاست سخت‌گیرانه‌ای** دارن و استفاده از کد بدون لایسنس رو **ممنوع** می‌دونن. یعنی پروژه‌ی بدون لایسنس = از دست دادن ۹۰٪ کاربران بالقوه!
+
+## 🛠️ راه‌حل سریع در کد
+
+### ۱. اضافه کردن لایسنس با CLI (سریع‌ترین راه)
+
+```bash
+# ✅ استفاده از license (ابزار رسمی Node.js)
+npx license-init
+
+# ✅ یا با ابزار choosealicense
+npx license-cli mit
+
+# ✅ در پروژه‌های Python
+pip install licensor
+licensor --mit --name "Your Name" --year 2026
+```
+
+### ۲. ساخت دستی فایل LICENSE (روش استاندارد)
+
+```bash
+# ✅ ساخت فایل لایسنس در ریشه‌ی پروژه
+touch LICENSE
+
+# ✅ اضافه کردن متن لایسنس MIT (مثال)
+cat > LICENSE << 'EOF'
+MIT License
+
+Copyright (c) 2026 [نام شما]
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+EOF
+```
+
+### ۳. اسکریپت بررسی لایسنس وابستگی‌ها
+
+```javascript
+// scripts/check-licenses.js
+import { execSync } from 'child_process';
+import fs from 'fs';
+
+// ✅ لایسنس‌های مجاز برای پروژه‌ی ما
+const ALLOWED_LICENSES = [
+  'MIT',
+  'Apache-2.0',
+  'BSD-2-Clause',
+  'BSD-3-Clause',
+  'ISC',
+  'CC0-1.0',
+];
+
+// ✅ لایسنس‌های ممنوع (Copyleft قوی)
+const FORBIDDEN_LICENSES = [
+  'GPL-2.0',
+  'GPL-3.0',
+  'AGPL-3.0',
+  'SSPL-1.0',
+];
+
+function checkLicenses() {
+  try {
+    // ✅ دریافت لیست وابستگی‌ها و لایسنسشون
+    const output = execSync('npx license-checker --json', { encoding: 'utf-8' });
+    const packages = JSON.parse(output);
+
+    const violations = [];
+    const warnings = [];
+
+    for (const [pkg, info] of Object.entries(packages)) {
+      const licenses = Array.isArray(info.licenses) ? info.licenses : [info.licenses];
+      
+      for (const license of licenses) {
+        // ❌ بررسی لایسنس ممنوع
+        if (FORBIDDEN_LICENSES.includes(license)) {
+          violations.push({
+            package: pkg,
+            license: license,
+            message: `❌ لایسنس ${license} با پروژه‌ی ما سازگار نیست!`,
+          });
+        }
+        // ⚠️ هشدار برای لایسنس ناشناخته
+        else if (!ALLOWED_LICENSES.includes(license)) {
+          warnings.push({
+            package: pkg,
+            license: license,
+            message: `⚠️ لایسنس ${license} بررسی نشده - لطفاً دستی چک کن`,
+          });
+        }
+      }
+    }
+
+    // ✅ نمایش نتایج
+    if (violations.length > 0) {
+      console.error('\n🚨 نقض لایسنس پیدا شد:');
+      violations.forEach(v => {
+        console.error(`  ${v.package}: ${v.message}`);
+      });
+      process.exit(1);
+    }
+
+    if (warnings.length > 0) {
+      console.warn('\n⚠️ هشدارهای لایسنس:');
+      warnings.forEach(w => {
+        console.warn(`  ${w.package}: ${w.message}`);
+      });
+    }
+
+    console.log('\n✅ تمام لایسنس‌ها سازگار هستند!');
+    
+    // ✅ ذخیره گزارش
+    fs.writeFileSync(
+      'license-report.json',
+      JSON.stringify({ violations, warnings, checkedAt: new Date() }, null, 2)
+    );
+    
+  } catch (error) {
+    console.error('❌ خطا در بررسی لایسنس‌ها:', error.message);
+    process.exit(1);
+  }
+}
+
+checkLicenses();
+```
+
+### ۴. هوک React برای نمایش لایسنس در UI
+
+```jsx
+// components/LicenseBadge.jsx
+import { useState, useEffect } from 'react';
+
+export function LicenseBadge({ license = 'MIT', author, year }) {
+  const [licenseInfo, setLicenseInfo] = useState(null);
+
+  useEffect(() => {
+    // ✅ اطلاعات لایسنس‌های رایج
+    const licenses = {
+      'MIT': {
+        name: 'MIT License',
+        color: 'bg-green-600',
+        icon: '✅',
+        description: 'آزادترین لایسنس - استفاده تجاری مجاز',
+      },
+      'Apache-2.0': {
+        name: 'Apache 2.0',
+        color: 'bg-blue-600',
+        icon: '🛡️',
+        description: 'مناسب پروژه‌های تجاری + حفاظت پتنت',
+      },
+      'GPL-3.0': {
+        name: 'GPL v3',
+        color: 'bg-orange-600',
+        icon: '🔄',
+        description: 'Copyleft - مشتقات باید متن‌باز بمونن',
+      },
+      'AGPL-3.0': {
+        name: 'AGPL v3',
+        color: 'bg-red-600',
+        icon: '🔒',
+        description: 'سخت‌گیرانه - حتی سرویس‌های ابری',
+      },
+    };
+
+    setLicenseInfo(licenses[license] || {
+      name: license,
+      color: 'bg-gray-600',
+      icon: '📄',
+      description: 'لایسنس سفارشی',
+    });
+  }, [license]);
+
+  if (!licenseInfo) return null;
+
+  return (
+    <div className="inline-flex items-center gap-2">
+      <span
+        className={`px-3 py-1 ${licenseInfo.color} text-white text-sm font-medium rounded-full flex items-center gap-1`}
+        title={licenseInfo.description}
+      >
+        {licenseInfo.icon} {licenseInfo.name}
+      </span>
+      
+      {author && (
+        <span className="text-xs text-gray-600">
+          © {year || new Date().getFullYear()} {author}
+        </span>
+      )}
+    </div>
+  );
+}
+```
+
+### ۵. کامپوننت نمایش لایسنس در README
+
+```jsx
+// components/ProjectLicenseInfo.jsx
+import { LicenseBadge } from './LicenseBadge';
+
+export function ProjectLicenseInfo() {
+  return (
+    <div className="max-w-2xl mx-auto p-6 bg-white rounded-xl shadow-lg space-y-4">
+      <h2 className="text-2xl font-bold flex items-center gap-2">
+        📜 مجوز پروژه
+      </h2>
+
+      <div className="space-y-3">
+        <LicenseBadge 
+          license="MIT" 
+          author="Your Name" 
+          year="2026" 
+        />
+
+        <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
+          <p className="text-sm text-blue-900 font-medium mb-2">
+            ✅ این پروژه تحت مجوز MIT منتشر شده است.
+          </p>
+          <p className="text-xs text-blue-800">
+            یعنی می‌تونی آزادانه ازش استفاده کنی، تغییر بدی، و حتی در پروژه‌های تجاری استفاده کنی.
+            فقط کافیه نام و لایسنس اصلی رو حفظ کنی.
+          </p>
+        </div>
+
+        <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+          <p className="text-sm text-yellow-900 font-medium mb-2">
+            ⚠️ سلب مسئولیت
+          </p>
+          <p className="text-xs text-yellow-800">
+            این نرم‌افزار «همان‌طور که هست» ارائه می‌شود، بدون هیچ‌گونه ضمانت.
+            نویسندگان مسئول هیچ‌گونه خسارتی نیستند.
+          </p>
+        </div>
+      </div>
+
+      <a
+        href="/LICENSE"
+        className="inline-block px-4 py-2 bg-gray-800 text-white rounded-lg hover:bg-gray-900 text-sm"
+      >
+        📄 مشاهده متن کامل لایسنس
+      </a>
+    </div>
+  );
+}
+```
+
+### ۶. بررسی خودکار لایسنس در CI/CD
+
+```yaml
+# .github/workflows/license-check.yml
+name: License Check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check-licenses:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      # ✅ بررسی لایسنس وابستگی‌ها
+      - name: Check dependency licenses
+        run: node scripts/check-licenses.js
+      
+      # ✅ بررسی وجود فایل LICENSE
+      - name: Check LICENSE file exists
+        run: |
+          if [ ! -f LICENSE ]; then
+            echo "❌ فایل LICENSE پیدا نشد!"
+            exit 1
+          fi
+          echo "✅ فایل LICENSE موجود است"
+      
+      # ✅ بررسی فرمت لایسنس
+      - name: Validate license format
+        run: |
+          if ! grep -q "MIT License\|Apache License\|GNU GENERAL PUBLIC LICENSE" LICENSE; then
+            echo "⚠️ فرمت لایسنس غیراستاندارد است"
+          fi
+```
+
+## 🔗 ابزار تست و بررسی
+
+- **GitHub License Detector**: GitHub خودکار لایسنس رو تشخیص میده (اگه فایل LICENSE استاندارد باشه)
+- **choosealicense.com**: راهنمای رسمی GitHub برای انتخاب لایسنس
+- **license-checker** (npm): بررسی لایسنس تمام وابستگی‌ها
+- **FOSSA**: ابزار حرفه‌ای برای مدیریت لایسنس در پروژه‌های بزرگ
+- **SPDX License List**: لیست استاندارد تمام لایسنس‌های متن‌باز
+- **Open Source License Compliance**: ابزارهای SCA (Software Composition Analysis)
+
+## ⚠️ چک‌لیست نهایی
+
+- [ ] آیا فایل `LICENSE` در ریشه‌ی پروژه وجود داره؟
+- [ ] آیا لایسنس انتخابی با هدف پروژه سازگاره؟ (تجاری/اجتماعی)
+- [ ] آیا سال و نام صاحب کپی‌رایت درست نوشته شده؟
+- [ ] آیا متن لایسنس استاندارد و تغییر نیافته است؟
+- [ ] آیا هدر کپی‌رایت به فایل‌های کد اضافه شده؟ (برای پروژه‌های بزرگ)
+- [ ] آیا لایسنس تمام وابستگی‌ها بررسی شده؟
+- [ ] آیا تضادی بین لایسنس پروژه و وابستگی‌ها وجود نداره؟
+- [ ] آیا در `package.json` فیلد `license` تنظیم شده؟
+- [ ] آیا در README بخش لایسنس ذکر شده؟
+- [ ] آیا CI/CD برای بررسی خودکار لایسنس تنظیم شده؟
+- [ ] آیا اگر پروژه Dual License است، هر دو لایسنس واضح توضیح داده شدن؟
+
+> **قانون ۳ ثانیه‌ای:** برو تو ریپازیتوری GitHub پروژه‌ت. اگه کنار اسم پروژه آیکون لایسنس (مثل `MIT`, `Apache-2.0`) رو نمی‌بینی، یعنی پروژه‌ت **بدون لایسنس** و عملاً غیرقابل استفاده‌ست! همین الان یه فایل `LICENSE` اضافه کن.
