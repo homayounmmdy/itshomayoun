@@ -23,13 +23,13 @@ export const Navbar: FC<NavbarProps> = ({ children, pageMap, className }) => {
                 </NavbarLink>
             ))} */}
       {children}
-      <NavbarLink href="/" target="_blank">
+      <NavbarLink href="/">
         خانه
       </NavbarLink>
-      <NavbarLink href="/posts" target="_blank">
+      <NavbarLink href="/posts">
         پست ها
       </NavbarLink>
-      <NavbarLink href="/playlists" target="_blank">
+      <NavbarLink href="/playlists">
         فهرست پخش ها
       </NavbarLink>
       <NavbarLink href="/rss.xml" target="_blank">
