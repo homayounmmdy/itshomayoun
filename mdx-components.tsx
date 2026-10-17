@@ -1,44 +1,41 @@
-import {useMDXComponents as getBlogMDXComponents} from 'nextra-theme-blog'
-import {useMDXComponents as getNextraComponents} from 'nextra/mdx-components'
-import {Posts} from "@/components/posts";
-import {Tags} from "@/components/tags";
-import Playlists from '@/components/playlists';
-import AboutMe from '@/components/about-me';
+import AboutMe from "@/components/about-me";
+import Playlists from "@/components/playlists";
+import { Posts } from "@/components/posts";
+import { Tags } from "@/components/tags";
+import TopicConstellation from "@/components/topic-constellation";
+import { useMDXComponents as getBlogMDXComponents } from "nextra-theme-blog";
+import { useMDXComponents as getNextraComponents } from "nextra/mdx-components";
 
 const blogComponents = getBlogMDXComponents({
-    h1: ({children}) => (
-        <h1 className="custom-h1">
-            {children}
-        </h1>
-    ),
-    DateFormatter: ({date}) =>
-        `Last updated at ${date.toLocaleDateString('en', {
-            day: 'numeric',
-            month: 'long',
-            year: 'numeric'
-        })}`
-})
-
+  h1: ({ children }) => <h1 className="custom-h1">{children}</h1>,
+  DateFormatter: ({ date }) =>
+    `Last updated at ${date.toLocaleDateString("en", {
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+    })}`,
+});
 
 const defaultComponents = getNextraComponents({
-    wrapper({children, toc}) {
-        return (
-            <>
-                {children}
+  wrapper({ children, toc }) {
+    return (
+      <>
+        {children}
 
-                {/*<TOC toc={toc}/>*/}
-            </>
-        )
-    }
-})
+        {/*<TOC toc={toc}/>*/}
+      </>
+    );
+  },
+});
 
 export function useMDXComponents() {
-    return {
-        ...blogComponents,
-        ...defaultComponents,
-        AboutMe : AboutMe,
-        Posts: Posts,
-        Playlists: Playlists,
-        Tags: Tags,
-    }
+  return {
+    ...blogComponents,
+    ...defaultComponents,
+    AboutMe,
+    Posts,
+    Playlists,
+    Tags,
+    TopicConstellation,
+  };
 }
